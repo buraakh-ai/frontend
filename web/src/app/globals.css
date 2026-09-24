@@ -1,0 +1,40 @@
+@import "tailwindcss";
+
+/* Brand taken from agfintax.com: palette from its Elementor globals (primary
+   #03045E, accent #FA5F11, text #464646, #00B4D8 / #0077B6 blues, #DBF5FA
+   tint); Red Hat Display headings/menu, Montserrat body, orange pill buttons. */
+@theme {
+  --color-navy: #03045e;
+  --color-navy-soft: #1b1c73;
+  --color-accent: #fa5f11;
+  --color-accent-dark: #d94e08;
+  --color-sky: #00b4d8;
+  --color-ocean: #0077b6;
+  --color-tint: #dbf5fa;
+  --color-ink: #464646;
+  --color-muted: #6b7280;
+  --color-line: #e6e9ec;
+  --color-canvas: #f5f7fa;
+  --color-success: #0f9d58;
+  --color-warning: #b7791f;
+  --color-danger: #d93025;
+
+  --font-sans: var(--font-montserrat), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-red-hat), ui-sans-serif, system-ui, sans-serif;
+}
+
+html {
+  color-scheme: light;
+}
+
+body {
+  background: var(--color-canvas);
+  color: var(--color-ink);
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-display);
+  color: var(--color-navy);
+}

@@ -1,0 +1,29 @@
+# Both backends are separate projects with their own compose files, so this
+# frontend reaches them at their published host ports via host.docker.internal
+# (override BACKEND_BASE_URL / LEAD_SOURCE_BACKEND_URL for anything else).
+# Run the ad-generator backend on :8000 and the lead-source backend on :8001.
+services:
+  frontend:
+    build: .
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    environment:
+      - BACKEND_BASE_URL=${BACKEND_BASE_URL:-http://host.docker.internal:8000}
+      - LEAD_SOURCE_BACKEND_URL=${LEAD_SOURCE_BACKEND_URL:-http://host.docker.internal:8001}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # New Next.js frontend (web/); runs alongside Streamlit until it replaces it.
+  web:
+    build: ./web
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      - BACKEND_BASE_URL=${BACKEND_BASE_URL:-http://host.docker.internal:8000}
+      - LEAD_SOURCE_BACKEND_URL=${LEAD_SOURCE_BACKEND_URL:-http://host.docker.internal:8001}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
