@@ -1,5 +1,0 @@
-streamlit>=1.39
-requests>=2.32
-python-dotenv>=1.0
-pandas>=2.0
-boto3>=1.35  # lead_source: optional S3-hosted UI config (STREAMLIT_CONFIG_S3_URI)

@@ -1,61 +1,71 @@
-# Frontend — Buraq Growth Suite
+# Frontend — AGFinTax Growth Suite
 
-One Streamlit app with a left-hand module menu, replacing the two standalone frontends (`ad-generator-frontend` and `leadscraping-frontend`). It holds no business logic and no secrets: each module calls **its own backend** over HTTP.
+Next.js (App Router, TypeScript, Tailwind CSS 4) frontend for the Growth Suite,
+styled after agfintax.com (light theme, navy `#03045E`, orange `#FA5F11`,
+Montserrat/Roboto). It replaced the earlier Streamlit app. It holds no business
+logic and no secrets: each module calls **its own backend** through a
+server-side proxy. No backend changes are needed.
 
 | Module | Page | Backend | Backend URL env |
 |---|---|---|---|
-| Ad generator | `app_pages/ad_generator.py` | ad-generator-backend | `AD_GENERATOR_BACKEND_URL` → `BACKEND_BASE_URL` |
-| Lead source | `app_pages/lead_source.py` | leadscraping-backend | `LEAD_SOURCE_BACKEND_URL` → `BACKEND_URL` → `lead_source/streamlit_config.json` |
+| Ad generator | `src/app/ad-generator` | ad-generator-backend | `AD_GENERATOR_BACKEND_URL` → `BACKEND_BASE_URL` |
+| Lead source | `src/app/lead-source` | leadscraping-backend | `LEAD_SOURCE_BACKEND_URL` → `BACKEND_URL` → `src/config/lead-source.json` |
 
-## Layout
-
-```
-streamlit_app.py            shell: set_page_config, theme, sidebar brand header, st.navigation module list
-app_pages/                  one file per module
-lead_source/                Lead source's UI config: config_loader.py + streamlit_config.json (states, industries, roles, slider limits)
-utils/api.py                resolve_backend_url(), make_api(), env_flag()   (Ad generator)
-utils/theme.py              custom CSS on top of the native theme (keep in sync with .streamlit/config.toml)
-.streamlit/config.toml      native Streamlit theme (must sit in the directory streamlit is run from)
-tests/                      lead_source config-loader tests
-```
-
-## Configuration (`.env.example` → `.env`)
-
-See `.env.example`. Key point: **the two backends are different services**, and locally both default to port 8000, so run one on another port. The examples assume the lead-source backend on `8001`. The Lead source module deliberately never falls back to `BACKEND_BASE_URL` (that is the Ad generator's backend).
-
-`STREAMLIT_CONFIG_S3_URI` / `STREAMLIT_CONFIG_FILE` (optional) override the Lead source UI config, same as in the old standalone frontend.
-
-## Local setup
+## Run locally
 
 ```bash
-python3.12 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-cp .env.example .env
-.venv/bin/python -m streamlit run streamlit_app.py     # http://localhost:8501
-.venv/bin/python -m unittest discover -s tests -v       # Lead source config tests
+cp .env.example .env   # point at your backends
+npm install
+npm run dev            # http://localhost:3000
 ```
 
-Windows + Smart App Control: use `.\run.ps1 -m streamlit run streamlit_app.py`.
+Locally both backends default to port 8000, so run one on another port; the
+examples assume the lead-source backend on `8001`. The browser never calls the
+backends directly, so they need no CORS setup.
+
+Production build: `npm run build && npm start`. Lint: `npm run lint`.
+
+## How it's put together
+
+- `src/app/ad-generator`, `src/app/lead-source` — the two module pages. Each
+  `page.tsx` is a server component that reads env/config and renders the
+  client component next to it.
+- `src/app/api/ad/[...path]`, `src/app/api/lead/[...path]` — server-side
+  proxies to each module's own backend. Only allow-listed endpoints pass
+  through. Long calls stream keep-alive whitespace so a load balancer's idle
+  timeout doesn't drop them (Lead source runs can take up to 20 minutes).
+- `src/lib/server/lead-config.ts` + `src/config/lead-source.json` — Lead
+  source UI config (industries, states, roles, provider labels, slider
+  limits). Add options in the JSON, not in code. `STREAMLIT_CONFIG_S3_URI` /
+  `STREAMLIT_CONFIG_FILE` optionally override it (names kept from the
+  Streamlit app so deployments carry over).
+- `src/components/sidebar.tsx` — the left menu. Add a module to `MODULES`.
+- `src/app/globals.css` — brand palette (`@theme`).
 
 ## Docker
 
 ```bash
-docker compose up --build
+docker compose up --build   # http://localhost:3000
 ```
 
-Serves `:8501`. Defaults point at the backends' published host ports: Ad generator `http://host.docker.internal:8000`, Lead source `http://host.docker.internal:8001`.
+Defaults point at the backends' published host ports: Ad generator
+`http://host.docker.internal:8000`, Lead source `http://host.docker.internal:8001`.
 
 ## Deploying to AWS
 
-ECS Fargate behind an ALB (Streamlit needs a WebSocket, which App Runner doesn't support), same as the old Ad generator frontend: build and push the image to ECR, then `aws ecs update-service ... --force-new-deployment`. Set `BACKEND_BASE_URL` and `LEAD_SOURCE_BACKEND_URL` in the task definition. ALB health check `/_stcore/health`, port 8501.
+ECS Fargate behind an ALB: build and push the image to ECR, then
+`aws ecs update-service ... --force-new-deployment`. Set the env vars from
+`.env.example` on the task definition (at least `BACKEND_BASE_URL` and
+`LEAD_SOURCE_BACKEND_URL`).
+
+Changes from the Streamlit deployment:
+- Container port is **3000** (was 8501); update the target group.
+- ALB health check path is **`/`** (was `/_stcore/health`).
+- WebSocket support is no longer needed, but the ALB idle timeout must stay
+  above 15 s (the keep-alive interval); the default 60 s is fine.
 
 ## Adding a module
 
 1. Add `<MODULE>_BACKEND_URL` to `.env.example`.
-2. Add `app_pages/<module>.py` (no `st.set_page_config` — the shell owns it).
-3. Register it with an `st.Page(...)` entry in `streamlit_app.py`.
-
-## Known issues (carried over, unchanged)
-
-- Ad generator: the backend returns errors as JSON with HTTP 500, but `utils/api.make_api` calls `raise_for_status()` first, so the UI shows only "500 Server Error".
-- `use_container_width=True` is used in both modules; Streamlit 1.64 still accepts it but logs that it "will be removed after 2025-12-31". Replace with `width="stretch"` (or pin Streamlit) before upgrading further.
+2. Add a proxy route under `src/app/api/` and a page under `src/app/`.
+3. Add it to `MODULES` in `src/components/sidebar.tsx`.

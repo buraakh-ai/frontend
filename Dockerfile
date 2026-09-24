@@ -1,16 +1,17 @@
-FROM python:3.12-slim
-
+# Next.js standalone build: the final image holds only the traced server
+# bundle, not node_modules. All config is runtime env (see .env.example).
+FROM node:24-alpine AS build
 WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
 
-COPY requirements.txt requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY streamlit_app.py ./
-COPY app_pages/ app_pages/
-COPY utils/ utils/
-COPY lead_source/ lead_source/
-COPY .streamlit/ .streamlit/
-
-EXPOSE 8501
-
-CMD ["streamlit", "run", "streamlit_app.py", "--server.address=0.0.0.0", "--server.port=8501"]
+FROM node:24-alpine
+WORKDIR /app
+ENV NODE_ENV=production HOSTNAME=0.0.0.0 PORT=3000 NEXT_TELEMETRY_DISABLED=1
+COPY --from=build /app/.next/standalone ./
+COPY --from=build /app/.next/static ./.next/static
+USER node
+EXPOSE 3000
+CMD ["node", "server.js"]
