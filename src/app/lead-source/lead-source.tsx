@@ -46,6 +46,13 @@ type V2Key = (typeof V2_CONTROLS)[number][0];
 const today = () => new Date().toISOString().slice(0, 10);
 const splitCsv = (v: string) => [...new Set(v.split(",").map((x) => x.trim()).filter(Boolean))];
 const unique = (xs: string[]) => [...new Set(xs)];
+// crypto.randomUUID only exists on HTTPS/localhost; getRandomValues works on plain HTTP too.
+const newId = (): string =>
+  typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : "10000000-1000-4000-8000-100000000000".replace(/[018]/g, (c) =>
+        (Number(c) ^ (crypto.getRandomValues(new Uint8Array(1))[0] & (15 >> (Number(c) / 4)))).toString(16),
+      );
 // Mirrors Python truthiness: an empty dict/list/string counts as "nothing".
 const hasContent = (v: unknown) =>
   Array.isArray(v) ? v.length > 0 : v && typeof v === "object" ? Object.keys(v).length > 0 : !!v;
@@ -53,7 +60,7 @@ const hasContent = (v: unknown) =>
 function initialForm(config: LeadConfig) {
   const run = config.run_controls;
   return {
-    campaignId: crypto.randomUUID(),
+    campaignId: newId(),
     campaignName: config.campaign.default_name,
     campaignStatus: config.campaign.default_status,
     periodStart: today(),
@@ -98,7 +105,7 @@ function formFromCampaign(config: LeadConfig, base: Form, c: Row): Form {
   const country = str("country", config.geography.default_country);
   return {
     ...base,
-    campaignId: str("campaign_id", crypto.randomUUID()),
+    campaignId: str("campaign_id", newId()),
     campaignName: str("campaign_name", config.campaign.default_name),
     campaignStatus: config.campaign.statuses.includes(status) ? status : config.campaign.statuses[0],
     periodStart: str("period_start", today()),
@@ -154,7 +161,7 @@ export function LeadSource({ config, warning }: { config: LeadConfig; warning: s
   const [uploadError, setUploadError] = useState<string | null>(null);
   const elapsed = useElapsed(running);
 
-  // The form needs crypto.randomUUID and today's date, so build it on the client.
+  // The form needs a random campaign ID and today's date, so build it on the client.
   useEffect(() => {
     if (!store.get().form) store.set({ form: initialForm(config) });
   }, [config]);
