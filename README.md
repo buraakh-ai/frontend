@@ -76,9 +76,10 @@ project; its own default port is 8000). The proxy allow-lists three endpoints:
 |---|---|---|
 | `GET /records` | `?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD` (inclusive) | `[{"email", "first_name", "last_name"}, ...]` from RDS |
 | `GET /zoho/lists` | none | `[{"list_id", "list_name"}, ...]` Zoho Campaigns lists |
-| `POST /zoho/export` | `{"records": [...], "list_key": "..."}` or `{"records": [...], "list_name": "New list"}` | `{"results": [...], "total", "succeeded", "failed"}`; each result has `lead`, `contact` and `campaigns` stage statuses |
+| `POST /zoho/export` | `{"records": [...], "list_key": "..."}` or `{"records": [...], "list_name": "New list"}` | `{"results": [...], "total", "succeeded", "failed"}`; each result has `lead` (Zoho CRM Lead upserted on Email; no Contacts are created) and `campaigns` stage statuses. At most 200 records per request |
 
-The page sends every fetched lead to `/zoho/export`. Errors: a non-2xx status
+The page sends the fetched leads to `/zoho/export` in batches of 200 and sums the
+results. `/records` rejects ranges over 366 days or more than 10,000 rows (422). Errors: a non-2xx status
 with FastAPI-style `{"detail": "..."}` is shown to the user.
 
 ## Adding a module

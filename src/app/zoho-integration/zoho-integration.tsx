@@ -14,13 +14,14 @@ type ExportResult = {
   status: string;
   error: string | null;
   lead: Stage;
-  contact: Stage;
   campaigns: Stage;
 };
 type ExportResponse = { results: ExportResult[]; total: number; succeeded: number; failed: number };
 type Notice = { kind: "success" | "error" | "warning"; text: string };
 
 const NEW_LIST = "__new__";
+// The backend accepts at most this many records per /zoho/export request.
+const EXPORT_BATCH_SIZE = 200;
 
 const isoDay = (d: Date) => d.toISOString().slice(0, 10);
 const daysAgo = (n: number) => isoDay(new Date(Date.now() - n * 86_400_000));
@@ -93,20 +94,34 @@ export function ZohoIntegration() {
     if (!window.confirm(`Export ${leads.length} lead(s) to Zoho CRM and the Campaigns ${listLabel}?`)) return;
     setNotice(null);
     setExporting(true);
+    // Send batches one after another; a new list is created by the first batch
+    // and later batches find it again by name.
+    const result: ExportResponse = { results: [], total: 0, succeeded: 0, failed: 0 };
     try {
-      const result = await callApi<ExportResponse>("zoho", "zoho/export", { records: leads, ...listTarget });
+      for (let start = 0; start < leads.length; start += EXPORT_BATCH_SIZE) {
+        const batch = await callApi<ExportResponse>("zoho", "zoho/export", {
+          records: leads.slice(start, start + EXPORT_BATCH_SIZE),
+          ...listTarget,
+        });
+        result.results.push(...batch.results);
+        result.total += batch.total;
+        result.succeeded += batch.succeeded;
+        result.failed += batch.failed;
+      }
       set({ exportResult: result });
       setNotice(
         result.failed
           ? { kind: "warning", text: `Exported ${result.succeeded} of ${result.total} lead(s); ${result.failed} failed. See details below.` }
           : { kind: "success", text: `Exported all ${result.total} lead(s) to Zoho.` },
       );
-      // A newly created list should now be selectable.
-      if (creatingList) void fetchLists();
     } catch (e) {
-      setNotice({ kind: "error", text: `Export to Zoho failed: ${(e as Error).message}` });
+      set({ exportResult: result.total ? result : null });
+      const done = result.total ? ` (${result.total} of ${leads.length} lead(s) were processed before the error.)` : "";
+      setNotice({ kind: "error", text: `Export to Zoho failed: ${(e as Error).message}${done}` });
     } finally {
       setExporting(false);
+      // A newly created list should now be selectable.
+      if (creatingList) void fetchLists();
     }
   }
 
@@ -168,7 +183,6 @@ export function ZohoIntegration() {
                     email: r.email ?? "",
                     status: r.status,
                     lead: stageText(r.lead),
-                    contact: stageText(r.contact),
                     campaigns: stageText(r.campaigns),
                     error: r.error ?? "",
                   }))}
