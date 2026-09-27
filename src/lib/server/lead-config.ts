@@ -52,28 +52,39 @@ function merge(base: Record<string, Json>, overrides: Record<string, Json>): Rec
   return result;
 }
 
+// Settings for controls the page no longer has (campaign card, Version 1,
+// provider picker). Older override files may still carry them, so they are
+// dropped instead of failing validation; source_count_v2 became source_count.
+function dropRetiredKeys(overrides: Record<string, Json>): void {
+  delete overrides.campaign;
+  const run = overrides.run_controls;
+  if (!isObject(run)) return;
+  if ("source_count_v2" in run && !("source_count" in run)) run.source_count = run.source_count_v2;
+  for (const key of ["pipeline_versions", "default_pipeline_version", "v2_pipeline_version",
+    "source_count_v1", "source_count_v2", "default_providers"]) {
+    delete run[key];
+  }
+}
+
 function validateSemantics(config: LeadConfig): void {
-  const { geography, run_controls: run, campaign } = config;
+  const { geography, targeting, run_controls: run } = config;
   if (!geography.countries.includes(geography.default_country)) {
     throw new Error("default_country must be present in countries");
   }
   if (!geography.us_states.includes(geography.default_state)) {
     throw new Error("default_state must be present in us_states");
   }
-  if (!campaign.statuses.includes(campaign.default_status)) {
-    throw new Error("default_status must be present in statuses");
+  if (!targeting.default_industries.every((i) => targeting.industry_suggestions.includes(i))) {
+    throw new Error("default_industries must be present in industry_suggestions");
   }
-  if (!run.pipeline_versions.includes(run.default_pipeline_version)) {
-    throw new Error("default_pipeline_version must be present in pipeline_versions");
+  if (!targeting.default_roles.every((r) => targeting.role_suggestions.includes(r))) {
+    throw new Error("default_roles must be present in role_suggestions");
   }
-  if (!run.pipeline_versions.includes(run.v2_pipeline_version)) {
-    throw new Error("v2_pipeline_version must be present in pipeline_versions");
-  }
-  if (!run.default_providers.every((p) => p in run.provider_labels)) {
-    throw new Error("default_providers must be present in provider_labels");
+  if (!Object.keys(run.provider_labels).length) {
+    throw new Error("provider_labels must list at least one provider");
   }
   const rangeKeys = [
-    "source_count_v1", "source_count_v2", "lead_count", "oversampling_factor",
+    "source_count", "lead_count", "oversampling_factor",
     "max_queries", "results_per_query", "max_pages_per_query", "enrichment_batch_size",
   ] as const;
   for (const key of rangeKeys) {
@@ -100,6 +111,7 @@ async function loadLeadConfig(): Promise<{ config: LeadConfig; warning: string |
     const raw = uri ? await readS3(uri) : await readFile(file, "utf-8");
     const overrides: unknown = JSON.parse(raw);
     if (!isObject(overrides)) throw new Error("configuration root must be a JSON object");
+    dropRetiredKeys(overrides);
     validateShape(overrides, defaults);
     const merged = merge(defaults as unknown as Record<string, Json>, overrides) as unknown as LeadConfig;
     validateSemantics(merged);

@@ -1,7 +1,7 @@
 "use client";
 
-import { useId, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
-import { AlertTriangle, CheckCircle2, ChevronDown, Info, Loader2, XCircle, type LucideIcon } from "lucide-react";
+import { useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
+import { AlertTriangle, Check, CheckCircle2, ChevronDown, Info, Loader2, X, XCircle, type LucideIcon } from "lucide-react";
 
 const cx = (...classes: (string | false | null | undefined)[]) => classes.filter(Boolean).join(" ");
 
@@ -166,8 +166,9 @@ export function Checkbox({ label, checked, onChange }: { label: string; checked:
   );
 }
 
-export function Slider({ label, value, min, max, onChange }: {
+export function Slider({ label, hint, value, min, max, onChange }: {
   label: string;
+  hint?: string;
   value: number;
   min: number;
   max: number;
@@ -191,6 +192,127 @@ export function Slider({ label, value, min, max, onChange }: {
         onChange={(e) => onChange(Number(e.target.value))}
         className="w-full accent-accent"
       />
+      {hint && <p className="text-xs text-muted">{hint}</p>}
+    </div>
+  );
+}
+
+/** Multi-select dropdown: selected values show as removable chips; the menu
+ * has a filter box once the list is long enough to need one. */
+export function MultiSelect({ label, options, selected, onChange, placeholder = "Select…", emptyText }: {
+  label: string;
+  options: readonly string[];
+  selected: string[];
+  onChange: (v: string[]) => void;
+  placeholder?: string;
+  emptyText?: string;
+}) {
+  const id = useId();
+  const [open, setOpen] = useState(false);
+  const [filter, setFilter] = useState("");
+  const root = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent | KeyboardEvent) => {
+      if (e instanceof KeyboardEvent ? e.key === "Escape" : !root.current?.contains(e.target as Node)) {
+        setOpen(false);
+        setFilter("");
+      }
+    };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", close);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", close);
+    };
+  }, [open]);
+
+  const toggle = (o: string) => onChange(selected.includes(o) ? selected.filter((s) => s !== o) : [...selected, o]);
+  const q = filter.trim().toLowerCase();
+  const shown = q ? options.filter((o) => o.toLowerCase().includes(q)) : options;
+
+  if (options.length === 0) {
+    return (
+      <Field label={label}>
+        <p className="text-xs text-muted">{emptyText ?? "No options for this selection."}</p>
+      </Field>
+    );
+  }
+
+  return (
+    <div ref={root} className="relative space-y-1.5">
+      <label htmlFor={id} className="block text-sm font-medium text-navy">
+        {label}
+      </label>
+      <button
+        id={id}
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className={cx(control, "flex min-h-10 items-center gap-2 text-left")}
+      >
+        <span className="flex flex-1 flex-wrap gap-1.5">
+          {selected.length === 0 && <span className="text-gray-400">{placeholder}</span>}
+          {selected.map((o) => (
+            <span key={o} className="inline-flex items-center gap-1 rounded-full bg-navy px-2.5 py-0.5 text-xs font-medium text-white">
+              {o}
+              <X
+                aria-label={`Remove ${o}`}
+                className="size-3 cursor-pointer opacity-80 hover:opacity-100"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggle(o);
+                }}
+              />
+            </span>
+          ))}
+        </span>
+        <ChevronDown className={cx("size-4 shrink-0 text-muted transition-transform", open && "rotate-180")} />
+      </button>
+      {open && (
+        <div className="absolute inset-x-0 top-full z-20 mt-1 rounded-md border border-line bg-white shadow-lg">
+          {options.length > 8 && (
+            <div className="border-b border-line p-2">
+              <input
+                autoFocus
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                placeholder="Type to filter…"
+                className={control}
+              />
+            </div>
+          )}
+          <ul role="listbox" aria-multiselectable className="max-h-64 overflow-auto py-1">
+            {shown.map((o) => {
+              const on = selected.includes(o);
+              return (
+                <li key={o} role="option" aria-selected={on}>
+                  <button
+                    type="button"
+                    onClick={() => toggle(o)}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-ink hover:bg-canvas"
+                  >
+                    <span className={cx("flex size-4 items-center justify-center rounded border", on ? "border-navy bg-navy text-white" : "border-line")}>
+                      {on && <Check className="size-3" />}
+                    </span>
+                    {o}
+                  </button>
+                </li>
+              );
+            })}
+            {shown.length === 0 && <li className="px-3 py-1.5 text-sm text-muted">No matches.</li>}
+          </ul>
+          {selected.length > 0 && (
+            <div className="flex justify-end border-t border-line px-3 py-1.5">
+              <button type="button" onClick={() => onChange([])} className="text-xs font-medium text-ocean hover:underline">
+                Clear all
+              </button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
