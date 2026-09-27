@@ -1,7 +1,7 @@
-# Both backends are separate projects with their own compose files, so this
+# The backends are separate projects with their own compose files, so this
 # frontend reaches them at their published host ports via host.docker.internal
-# (override BACKEND_BASE_URL / LEAD_SOURCE_BACKEND_URL for anything else).
-# Run the ad-generator backend on :8000 and the lead-source backend on :8001.
+# (override the *_BACKEND_URL vars for anything else). Run the ad-generator
+# backend on :8000, lead-source on :8001 and zoho-integration on :8002.
 services:
   frontend:
     build: .
@@ -12,5 +12,6 @@ services:
     environment:
       - BACKEND_BASE_URL=${BACKEND_BASE_URL:-http://host.docker.internal:8000}
       - LEAD_SOURCE_BACKEND_URL=${LEAD_SOURCE_BACKEND_URL:-http://host.docker.internal:8001}
+      - ZOHO_INTEGRATION_BACKEND_URL=${ZOHO_INTEGRATION_BACKEND_URL:-http://host.docker.internal:8002}
     extra_hosts:
       - "host.docker.internal:host-gateway"

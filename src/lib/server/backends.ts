@@ -22,3 +22,9 @@ export function envFlag(name: string, fallback = false): boolean {
   if (raw === undefined) return fallback;
   return ["1", "true", "yes", "on"].includes(raw.trim().toLowerCase());
 }
+
+/** Zoho integration: ZOHO_INTEGRATION_BACKEND_URL only. Never falls back to
+ * the other modules' backends. */
+export function zohoIntegrationBackendUrl(): string {
+  return trim(process.env.ZOHO_INTEGRATION_BACKEND_URL || "http://localhost:8002");
+}
