@@ -26,5 +26,5 @@ export function envFlag(name: string, fallback = false): boolean {
 /** Zoho integration: ZOHO_INTEGRATION_BACKEND_URL only. Never falls back to
  * the other modules' backends. */
 export function zohoIntegrationBackendUrl(): string {
-  return trim(process.env.ZOHO_INTEGRATION_BACKEND_URL || "http://localhost:8002");
+  return trim(process.env.ZOHO_INTEGRATION_BACKEND_URL || "http://zoho-export.leadsource.local:8000");
 }
