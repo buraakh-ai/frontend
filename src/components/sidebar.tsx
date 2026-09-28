@@ -4,7 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
-import { CloudUpload, Megaphone, Menu, UserSearch, X, type LucideIcon } from "lucide-react";
+import { CloudUpload, FileInput, Megaphone, Menu, UserSearch, X, type LucideIcon } from "lucide-react";
 
 type Module = { href: string; label: string; icon: LucideIcon };
 
@@ -13,6 +13,7 @@ const MODULES: Module[] = [
   { href: "/ad-generator", label: "Ad generator", icon: Megaphone },
   { href: "/lead-source", label: "Lead source", icon: UserSearch },
   { href: "/zoho-integration", label: "Export leads to Zoho", icon: CloudUpload },
+  { href: "/bitrix-export", label: "Bitrix export", icon: FileInput },
 ];
 
 function Brand() {

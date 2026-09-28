@@ -1,10 +1,10 @@
-/** What /api/ad/*, /api/lead/* and /api/zoho/* return for JSON calls. */
+/** What /api/ad/*, /api/lead/*, /api/zoho/* and /api/bitrix/* return for JSON calls. */
 export type BackendResult<T = unknown> = { ok: true; data: T } | { ok: false; error: string };
 
 /** Client helper: POSTs (or GETs) through this app's proxy and returns the
  * backend's JSON, throwing an Error with the backend's message on failure. */
 export async function callApi<T = Record<string, unknown>>(
-  module: "ad" | "lead" | "zoho",
+  module: "ad" | "lead" | "zoho" | "bitrix",
   path: string,
   body?: unknown,
 ): Promise<T> {

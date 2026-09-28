@@ -11,6 +11,7 @@ server-side proxy. No backend changes are needed.
 | Ad generator | `src/app/ad-generator` | ad-generator-backend | `AD_GENERATOR_BACKEND_URL` → `BACKEND_BASE_URL` |
 | Lead source | `src/app/lead-source` | leadscraping-backend | `LEAD_SOURCE_BACKEND_URL` → `BACKEND_URL` → `src/config/lead-source.json` |
 | Export leads to Zoho | `src/app/zoho-integration` | zohoexport | `ZOHO_INTEGRATION_BACKEND_URL` |
+| Bitrix export | `src/app/bitrix-export` | bitrixexport (+ zohoexport to export) | `BITRIX_EXPORT_BACKEND_URL` (+ `BITRIX_EXPORT_API_KEY`) |
 
 ## Run locally
 
@@ -21,17 +22,17 @@ npm run dev            # http://localhost:3000
 ```
 
 Locally both existing backends default to port 8000, so run one on another
-port; the examples assume lead-source on `8001` and zoho-integration on `8002`. The browser never calls the
+port; the examples assume lead-source on `8001`, zoho-integration on `8002` and bitrix-export on `8003`. The browser never calls the
 backends directly, so they need no CORS setup.
 
 Production build: `npm run build && npm start`. Lint: `npm run lint`.
 
 ## How it's put together
 
-- `src/app/ad-generator`, `src/app/lead-source`, `src/app/zoho-integration` — the module pages. Each
+- `src/app/ad-generator`, `src/app/lead-source`, `src/app/zoho-integration`, `src/app/bitrix-export` — the module pages. Each
   `page.tsx` is a server component that reads env/config and renders the
   client component next to it.
-- `src/app/api/{ad,lead,zoho}/[...path]` — server-side
+- `src/app/api/{ad,lead,zoho,bitrix}/[...path]` — server-side
   proxies to each module's own backend. Only allow-listed endpoints pass
   through. Long calls stream keep-alive whitespace so a load balancer's idle
   timeout doesn't drop them (Lead source runs can take up to 20 minutes).
@@ -81,6 +82,25 @@ project; its own default port is 8000). The proxy allow-lists three endpoints:
 The page sends the fetched leads to `/zoho/export` in batches of 200 and sums the
 results. `/records` rejects ranges over 366 days or more than 10,000 rows (422). Errors: a non-2xx status
 with FastAPI-style `{"detail": "..."}` is shown to the user.
+
+## Bitrix export: backend contract
+
+The "Bitrix export" page (`src/app/bitrix-export`) reads leads from Bitrix24
+through the `bitrixexport` backend (`uv run uvicorn bitrixexport.api:app --port 8003`
+in `bitrix-export-backend`) and exports the selected ones through the Zoho
+module's `POST /zoho/export` and `GET /zoho/lists` (above), so the Zoho backend
+must be running too. The `/api/bitrix` proxy allow-lists two endpoints and sends
+`BITRIX_EXPORT_API_KEY` as `X-API-Key` when set:
+
+| Endpoint | Request | Response |
+|---|---|---|
+| `GET /forms` | none | `{"count", "items": [{"id", "name", "active", "is_callback"}]}` active CRM web forms, for the Form name dropdown |
+| `GET /leads` | `?form_id=9&date_from=YYYY-MM-DD&date_to=YYYY-MM-DD&contact_details=true` (dates inclusive; no `form_id` = all forms) | `{"count", "items": [{"id", "createdTime", "contact": {"email", "first_name", "last_name", "phone"}, ...}]}` |
+
+`contact_details=true` makes the backend find each lead's email and name wherever
+its form stored them (standard lead fields, custom fields labelled "Email",
+"First Name", ..., or the linked CRM contact). Leads without an email or last
+name (Zoho CRM requires both) are shown but start unchecked.
 
 ## Adding a module
 

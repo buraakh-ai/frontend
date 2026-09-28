@@ -28,3 +28,15 @@ export function envFlag(name: string, fallback = false): boolean {
 export function zohoIntegrationBackendUrl(): string {
   return trim(process.env.ZOHO_INTEGRATION_BACKEND_URL || "http://zoho-export.leadsource.local:8000");
 }
+
+/** Bitrix export: BITRIX_EXPORT_BACKEND_URL only. Never falls back to the
+ * other modules' backends. */
+export function bitrixExportBackendUrl(): string {
+  return trim(process.env.BITRIX_EXPORT_BACKEND_URL || "http://localhost:8003");
+}
+
+/** The bitrixexport backend's EXPORT_API_KEY, sent as X-API-Key. Server-side
+ * only; the browser never sees it. */
+export function bitrixExportApiKey(): string | undefined {
+  return process.env.BITRIX_EXPORT_API_KEY || undefined;
+}

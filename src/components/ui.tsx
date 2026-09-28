@@ -468,9 +468,17 @@ function cell(value: unknown): string {
   return String(value);
 }
 
-/** Simple scrollable table; columns default to every key seen in the rows. */
-export function DataTable({ rows, columns }: { rows: Record<string, unknown>[]; columns?: string[] }) {
+/** Simple scrollable table; columns default to every key seen in the rows.
+ * With `selected` + `onSelectedChange`, the first column's cell starts with a
+ * checkbox (e.g. before each email); `selected[i]` is row i's state. */
+export function DataTable({ rows, columns, selected, onSelectedChange }: {
+  rows: Record<string, unknown>[];
+  columns?: string[];
+  selected?: boolean[];
+  onSelectedChange?: (selected: boolean[]) => void;
+}) {
   const cols = columns ?? [...new Set(rows.flatMap((r) => Object.keys(r)))];
+  const selectable = selected !== undefined && onSelectedChange !== undefined;
   return (
     <div className="max-h-[480px] overflow-auto rounded-lg border border-line">
       <table className="w-full text-left text-sm">
@@ -486,9 +494,23 @@ export function DataTable({ rows, columns }: { rows: Record<string, unknown>[]; 
         <tbody>
           {rows.map((r, i) => (
             <tr key={i} className="border-b border-line last:border-0 hover:bg-canvas/60">
-              {cols.map((c) => (
+              {cols.map((c, ci) => (
                 <td key={c} className="max-w-xs truncate px-3 py-2" title={cell(r[c])}>
-                  {cell(r[c])}
+                  {selectable && ci === 0 ? (
+                    <label className="flex cursor-pointer items-center gap-2.5">
+                      <input
+                        type="checkbox"
+                        checked={selected[i] ?? false}
+                        onChange={(e) =>
+                          onSelectedChange(rows.map((_, j) => (j === i ? e.target.checked : (selected[j] ?? false))))
+                        }
+                        className="size-4 shrink-0 cursor-pointer rounded border-line accent-accent"
+                      />
+                      <span className="truncate">{cell(r[c])}</span>
+                    </label>
+                  ) : (
+                    cell(r[c])
+                  )}
                 </td>
               ))}
             </tr>
