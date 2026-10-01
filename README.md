@@ -41,6 +41,8 @@ Production build: `npm run build && npm start`. Lint: `npm run lint`.
   limits). Add options in the JSON, not in code. `STREAMLIT_CONFIG_S3_URI` /
   `STREAMLIT_CONFIG_FILE` optionally override it (names kept from the
   Streamlit app so deployments carry over).
+- `src/auth.ts`, `src/proxy.ts`, `src/app/login` — Microsoft sign-in (see
+  below).
 - `src/components/sidebar.tsx` — the left menu. Add a module to `MODULES`.
 - `src/app/globals.css` — brand palette (`@theme`).
 
@@ -63,9 +65,53 @@ ECS Fargate behind an ALB: build and push the image to ECR, then
 
 Changes from the Streamlit deployment:
 - Container port is **3000** (was 8501); update the target group.
-- ALB health check path is **`/`** (was `/_stcore/health`).
+- ALB health check path is **`/api/health`** (was `/_stcore/health`). It is the
+  one app route that stays public when sign-in is on.
 - WebSocket support is no longer needed, but the ALB idle timeout must stay
   above 15 s (the keep-alive interval); the default 60 s is fine.
+
+## Microsoft sign-in (SSO)
+
+Staff sign in with their Microsoft work account (Azure Entra ID) through
+Auth.js v5. It is **off until `AUTH_ENABLED=true`**, so the app runs as before
+until the Azure details exist.
+
+When on, every page and every `/api/*` backend call needs a signed-in user
+(`src/proxy.ts`): pages redirect to `/login`, API calls get a 401 in the usual
+`{ ok: false, error }` shape. Only `/login`, `/api/auth/*` (the sign-in flow),
+`/api/health` and static assets stay public. Sessions are a signed cookie (no
+database) and last 8 hours. If SSO is on but any `AUTH_*` value is missing,
+the app refuses every request (503) rather than run unprotected.
+
+**1. Azure (an Entra ID admin does this):**
+
+- App registration, single tenant, with a **Web** redirect URI of
+  `https://<app-domain>/api/auth/callback/microsoft-entra-id` (add
+  `http://localhost:3000/api/auth/callback/microsoft-entra-id` for local runs).
+  Azure only accepts `https://` here, apart from localhost.
+- Delegated Microsoft Graph permissions `openid`, `profile`, `email`, with
+  admin consent. A client secret.
+- Enterprise applications → the app → Properties → **Assignment required =
+  Yes**, then assign the users or groups who may sign in. This is the access
+  list; the app itself lets in anyone from the tenant that Azure lets through.
+
+**2. App env** (`.env` locally; ECS task definition in AWS, with the two
+secrets in Secrets Manager):
+
+| Variable | Value |
+|---|---|
+| `AUTH_ENABLED` | `true` |
+| `AUTH_SECRET` | `openssl rand -base64 32` (any long random string; changing it signs everyone out) |
+| `AUTH_MICROSOFT_ENTRA_ID_ID` | Application (client) ID |
+| `AUTH_MICROSOFT_ENTRA_ID_TENANT_ID` | Directory (tenant) ID. Required: sign-in is pinned to this tenant |
+| `AUTH_MICROSOFT_ENTRA_ID_SECRET` | Client secret **value** (not its ID) |
+
+**3. AWS, before turning it on:** the site must be served over HTTPS on its
+own domain (an ALB HTTPS listener with an ACM certificate), and the target
+group health check must be `/api/health`; any other path redirects to
+`/login` and the task would be marked unhealthy.
+
+Users removed in Azure keep their session until it expires (up to 8 hours).
 
 ## Export leads to Zoho: backend contract
 

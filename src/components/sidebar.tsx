@@ -4,9 +4,10 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
-import { CloudUpload, FileInput, Megaphone, Menu, UserSearch, X, type LucideIcon } from "lucide-react";
+import { CloudUpload, FileInput, LogOut, Megaphone, Menu, UserSearch, X, type LucideIcon } from "lucide-react";
 
 type Module = { href: string; label: string; icon: LucideIcon };
+type User = { name?: string | null; email?: string | null };
 
 // Add new modules here; they stack directly under the "Modules" label.
 const MODULES: Module[] = [
@@ -59,7 +60,29 @@ function ModuleNav({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
-export function Sidebar() {
+/** Signed-in user and sign-out; only rendered when Microsoft SSO is on. */
+function Account({ user, onSignOut }: { user?: User; onSignOut: () => Promise<void> }) {
+  return (
+    <div className="flex items-center gap-3">
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-sm font-semibold text-navy">{user?.name || user?.email || "Signed in"}</div>
+        {user?.name && user.email && <div className="truncate text-xs text-muted">{user.email}</div>}
+      </div>
+      <form action={onSignOut}>
+        <button
+          type="submit"
+          aria-label="Sign out"
+          title="Sign out"
+          className="rounded-md p-2 text-muted hover:bg-canvas hover:text-navy"
+        >
+          <LogOut className="size-4" />
+        </button>
+      </form>
+    </div>
+  );
+}
+
+export function Sidebar({ user, onSignOut }: { user?: User; onSignOut?: () => Promise<void> }) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -69,6 +92,11 @@ export function Sidebar() {
         <Brand />
         <div className="my-8 h-px bg-line" />
         <ModuleNav />
+        {onSignOut && (
+          <div className="mt-auto border-t border-line pt-4">
+            <Account user={user} onSignOut={onSignOut} />
+          </div>
+        )}
       </aside>
 
       {/* Mobile: top bar with a slide-down menu. */}
@@ -87,6 +115,11 @@ export function Sidebar() {
         {open && (
           <div className="pt-5 pb-2">
             <ModuleNav onNavigate={() => setOpen(false)} />
+            {onSignOut && (
+              <div className="mt-5 border-t border-line pt-4">
+                <Account user={user} onSignOut={onSignOut} />
+              </div>
+            )}
           </div>
         )}
       </header>
