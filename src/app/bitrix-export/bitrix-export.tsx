@@ -1,122 +1,79 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { CloudUpload, RefreshCw, Search } from "lucide-react";
+import { useState } from "react";
+import { DatabaseZap, Download, Search } from "lucide-react";
 import { callApi } from "@/lib/backend-result";
 import { createStore } from "@/lib/store";
-import { Alert, Button, Card, Checkbox, DataTable, Metric, PageHeader, Select, TextInput } from "@/components/ui";
+import {
+  Alert, Button, Card, Checkbox, DataTable, Metric, PageHeader, Select, TextInput, downloadText,
+} from "@/components/ui";
 
-type BitrixForm = { id: number; name: string };
 type Contact = { email: string | null; first_name: string | null; last_name: string | null; phone: string | null };
-type BitrixLead = { id: number; createdTime: string | null; contact: Contact };
-type LeadsResponse = { count: number; items: BitrixLead[] };
-type Lead = {
-  email: string;
-  first_name: string;
-  last_name: string;
-  phone: string;
-  created: string;
-  bitrix_lead_id: number;
+// GET /getBitrixLeads item (with contact_details=true). Only id is guaranteed.
+// Sent back unchanged to /exportToLeadHub, which maps it for the Lead Hub.
+type BitrixLead = {
+  id: number;
+  createdTime?: string | null;
+  contact?: Contact | null;
+  name?: string | null;
+  lastName?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  title?: string | null;
+  stageId?: string | null;
+  category?: string | null;
+  category_type?: string | null;
+  [field: string]: unknown;
 };
-type CampaignList = { list_id: string; list_name: string | null };
-type Stage = { status: string; error?: string | null; message?: string };
-type ExportResult = { email: string | null; status: string; error: string | null; lead: Stage; campaigns: Stage };
-type ExportResponse = { results: ExportResult[]; total: number; succeeded: number; failed: number };
+type LeadsResponse = { count: number; categories?: Record<string, number>; items: BitrixLead[] };
+type ExportResponse = { sent: number; items: { lead_id: number; bitrix_lead_id: number }[] };
 type Notice = { kind: "success" | "error" | "warning"; text: string };
 
-const NEW_LIST = "__new__";
-// The Zoho export backend accepts at most this many records per /zoho/export request.
-const EXPORT_BATCH_SIZE = 200;
+const ALL = "";
 
 const isoDay = (d: Date) => d.toISOString().slice(0, 10);
 const daysAgo = (n: number) => isoDay(new Date(Date.now() - n * 86_400_000));
+const clean = (v: string | null | undefined) => v?.trim() || null;
 
-// Zoho CRM needs an email and a last name; leads without them start unchecked.
-const exportable = (l: Lead) => Boolean(l.email && l.last_name);
-
-const toLead = ({ id, createdTime, contact }: BitrixLead): Lead => ({
-  email: contact.email ?? "",
-  first_name: contact.first_name ?? "",
-  last_name: contact.last_name ?? "",
-  phone: contact.phone ?? "",
-  // Bitrix returns the portal's local time, e.g. 2026-09-06T22:43:48+03:00.
-  created: createdTime?.slice(0, 16).replace("T", " ") ?? "",
-  bitrix_lead_id: id,
-});
+// The same fallbacks the backend applies when it sends a lead to the Lead Hub.
+const firstName = (l: BitrixLead) => clean(l.name) ?? clean(l.contact?.first_name);
+const lastName = (l: BitrixLead) => clean(l.lastName) ?? clean(l.contact?.last_name);
+const email = (l: BitrixLead) => clean(l.email) ?? clean(l.contact?.email);
+const phone = (l: BitrixLead) => clean(l.phone) ?? clean(l.contact?.phone);
+// A lead nobody can contact isn't selected by default (it can still be ticked).
+const reachable = (l: BitrixLead) => Boolean(email(l) || phone(l));
 
 // Kept for the life of the tab, so loaded leads survive switching modules.
 const store = createStore({
-  forms: null as BitrixForm[] | null,
-  formId: "",
   from: daysAgo(7),
   to: isoDay(new Date()),
-  // The form and range the shown leads were fetched for (the inputs may since have changed).
-  loaded: null as { form: string; from: string; to: string; leads: Lead[] } | null,
-  // Which loaded leads to export (by row).
+  // The range the shown leads were fetched for (the inputs may since have changed).
+  loaded: null as { from: string; to: string; leads: BitrixLead[] } | null,
+  // Show only leads of this category ("" = all).
+  category: ALL,
+  // Which loaded leads to export (by row of `loaded.leads`).
   selected: [] as boolean[],
-  lists: null as CampaignList[] | null,
-  listChoice: "",
-  newListName: "",
-  exportResult: null as ExportResponse | null,
+  // Bitrix lead ids already exported to the Lead Hub in this tab.
+  exported: [] as number[],
 });
-
-const stageText = (s: Stage) => (s.error ? `${s.status}: ${s.error}` : s.status);
 
 export function BitrixExport() {
   const [s, set] = store.useStore();
   const [loading, setLoading] = useState(false);
-  const [loadingForms, setLoadingForms] = useState(false);
-  const [loadingLists, setLoadingLists] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
-  // Why "Export to Zoho" can't run yet; shown beside the button.
-  const [exportHint, setExportHint] = useState<string | null>(null);
   const rangeInvalid = !s.from || !s.to || s.to < s.from;
-  const formName = (id: string) => s.forms?.find((f) => String(f.id) === id)?.name ?? id;
-
-  const fetchForms = () =>
-    callApi<{ items: BitrixForm[] }>("bitrix", "forms").then(
-      ({ items }) => set({ forms: items }),
-      (e: Error) => setNotice({ kind: "error", text: `Could not load Bitrix forms: ${e.message}` }),
-    );
-
-  const fetchLists = () =>
-    callApi<CampaignList[]>("zoho", "zoho/lists").then(
-      (lists) => set({ lists }),
-      (e: Error) => setNotice({ kind: "error", text: `Could not load Zoho Campaigns lists: ${e.message}` }),
-    );
-
-  async function loadForms() {
-    setLoadingForms(true);
-    await fetchForms();
-    setLoadingForms(false);
-  }
-
-  async function loadLists() {
-    setLoadingLists(true);
-    await fetchLists();
-    setLoadingLists(false);
-  }
-
-  // Populate the form and list selectors once per tab.
-  useEffect(() => {
-    if (store.get().forms === null) void fetchForms();
-    if (store.get().lists === null) void fetchLists();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   async function getLeads() {
     setNotice(null);
     setLoading(true);
     try {
       const query = new URLSearchParams({ date_from: s.from, date_to: s.to, contact_details: "true" });
-      if (s.formId) query.set("form_id", s.formId);
-      const { items } = await callApi<LeadsResponse>("bitrix", `leads?${query}`);
-      const leads = items.map(toLead);
+      const { items } = await callApi<LeadsResponse>("bitrix", `getBitrixLeads?${query}`);
       set({
-        loaded: { form: s.formId ? formName(s.formId) : "All forms", from: s.from, to: s.to, leads },
-        selected: leads.map(exportable),
-        exportResult: null,
+        loaded: { from: s.from, to: s.to, leads: items },
+        category: ALL,
+        selected: items.map((l) => reachable(l) && !store.get().exported.includes(l.id)),
       });
     } catch (e) {
       setNotice({ kind: "error", text: `Could not get leads from Bitrix: ${(e as Error).message}` });
@@ -125,88 +82,62 @@ export function BitrixExport() {
     }
   }
 
-  const creatingList = s.listChoice === NEW_LIST;
-  const listTarget = creatingList
-    ? s.newListName.trim() && { list_name: s.newListName.trim() }
-    : s.listChoice && { list_key: s.listChoice };
-  const listLabel = creatingList
-    ? `new list "${s.newListName.trim()}"`
-    : `list "${s.lists?.find((l) => l.list_id === s.listChoice)?.list_name ?? s.listChoice}"`;
-  const selectedLeads = s.loaded?.leads.filter((_, i) => s.selected[i]) ?? [];
-  const unexportable = s.loaded?.leads.filter((l) => !exportable(l)).length ?? 0;
+  const leads = s.loaded?.leads ?? [];
+  // Category counts, most leads first.
+  const categories = Object.entries(
+    leads.reduce<Record<string, number>>((acc, l) => {
+      const c = l.category ?? "Uncategorized";
+      acc[c] = (acc[c] ?? 0) + 1;
+      return acc;
+    }, {}),
+  ).sort((a, b) => b[1] - a[1]);
+  // Rows of `leads` shown under the current category filter.
+  const visible = leads.flatMap((l, i) => (s.category === ALL || (l.category ?? "Uncategorized") === s.category ? [i] : []));
+  const selectedRows = visible.filter((i) => s.selected[i]);
+  const unreachable = visible.filter((i) => !reachable(leads[i])).length;
 
-  async function exportToZoho() {
-    // Say what's missing rather than leaving the button disabled with no reason.
-    const missing = !selectedLeads.length
-      ? "Select at least one lead to export."
-      : !s.listChoice
-        ? "Choose a Zoho Campaigns list (or \"+ Create a new list\") before exporting."
-        : !listTarget
-          ? "Enter a name for the new list before exporting."
-          : null;
-    setExportHint(missing);
-    if (missing || !listTarget) return;
-    const records = selectedLeads.map(({ email, first_name, last_name }) => ({ email, first_name, last_name }));
-    if (!window.confirm(`Export ${records.length} lead(s) to Zoho CRM and the Campaigns ${listLabel}?`)) return;
+  // Sends the given leads (by row) to the Lead Hub, after the user confirms.
+  async function exportToHub(rows: number[]) {
+    if (!rows.length) {
+      setNotice({ kind: "warning", text: "Select at least one lead to export." });
+      return;
+    }
+    if (!window.confirm(`Export ${rows.length} lead(s) to the Lead Hub?`)) return;
     setNotice(null);
     setExporting(true);
-    // Send batches one after another; a new list is created by the first batch
-    // and later batches find it again by name.
-    const result: ExportResponse = { results: [], total: 0, succeeded: 0, failed: 0 };
     try {
-      for (let start = 0; start < records.length; start += EXPORT_BATCH_SIZE) {
-        const batch = await callApi<ExportResponse>("zoho", "zoho/export", {
-          records: records.slice(start, start + EXPORT_BATCH_SIZE),
-          ...listTarget,
-        });
-        result.results.push(...batch.results);
-        result.total += batch.total;
-        result.succeeded += batch.succeeded;
-        result.failed += batch.failed;
-      }
-      set({ exportResult: result });
-      setNotice(
-        result.failed
-          ? { kind: "warning", text: `Exported ${result.succeeded} of ${result.total} lead(s); ${result.failed} failed. See details below.` }
-          : { kind: "success", text: `Exported all ${result.total} lead(s) to Zoho.` },
-      );
+      const { sent } = await callApi<ExportResponse>("bitrix", "exportToLeadHub", { leads: rows.map((i) => leads[i]) });
+      const ids = rows.map((i) => leads[i].id);
+      set((st) => ({
+        exported: [...st.exported, ...ids],
+        selected: st.selected.map((v, i) => v && !rows.includes(i)),
+      }));
+      setNotice({ kind: "success", text: `Exported ${sent} lead(s) to the Lead Hub. Exporting a lead again updates it rather than duplicating it.` });
     } catch (e) {
-      set({ exportResult: result.total ? result : null });
-      const done = result.total ? ` (${result.total} of ${records.length} lead(s) were processed before the error.)` : "";
-      setNotice({ kind: "error", text: `Export to Zoho failed: ${(e as Error).message}${done}` });
+      setNotice({ kind: "error", text: `Export to the Lead Hub failed: ${(e as Error).message}` });
     } finally {
       setExporting(false);
-      // A newly created list should now be selectable.
-      if (creatingList) void fetchLists();
     }
   }
 
-  const formOptions = ["", ...(s.forms ?? []).map((f) => String(f.id))];
-  const formatForm = (id: string) => (id === "" ? (s.forms ? "All forms" : "Loading forms…") : formName(id));
+  function downloadSelected() {
+    const name = `bitrix-leads_${s.loaded!.from}_${s.loaded!.to}.json`;
+    downloadText(name, JSON.stringify({ leads: selectedRows.map((i) => leads[i]) }, null, 2), "application/json");
+  }
 
-  const listOptions = ["", ...(s.lists ?? []).map((l) => l.list_id), NEW_LIST];
-  const formatList = (id: string) =>
-    id === ""
-      ? "Choose a list…"
-      : id === NEW_LIST
-        ? "+ Create a new list"
-        : (s.lists?.find((l) => l.list_id === id)?.list_name ?? id);
+  const categoryOptions = [ALL, ...categories.map(([c]) => c)];
+  const formatCategory = (c: string) =>
+    c === ALL ? `All categories (${leads.length})` : `${c} (${categories.find(([k]) => k === c)?.[1] ?? 0})`;
 
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Bitrix Export"
-        subtitle="Get leads submitted through a Bitrix24 CRM form for a date range, review them, and export them to Zoho CRM and a Zoho Campaigns list."
+        title="Bitrix24 Export"
+        subtitle="Get the leads created in Bitrix24 CRM for a date range, review them, and export the ones you approve to the Lead Hub."
       />
 
-      <Card title="Bitrix form and date range">
+      <Card title="Date range">
         <div className="space-y-4">
-          <div className="grid gap-4 sm:grid-cols-[1fr_auto] sm:items-end">
-            <Select label="Form name" value={s.formId} options={formOptions} format={formatForm} onChange={(v) => set({ formId: v })} />
-            <Button icon={RefreshCw} loading={loadingForms} onClick={loadForms}>
-              Refresh forms
-            </Button>
-          </div>
           <div className="grid gap-4 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
             <TextInput label="From date" type="date" value={s.from} max={s.to} onChange={(v) => set({ from: v })} />
             <TextInput label="To date" type="date" value={s.to} min={s.from} onChange={(v) => set({ to: v })} />
@@ -226,82 +157,69 @@ export function BitrixExport() {
         <Card title="Leads">
           <div className="space-y-4">
             <div className="grid gap-4 sm:grid-cols-4">
-              <Metric label="Form" value={s.loaded.form} />
-              <Metric label="Leads found" value={s.loaded.leads.length} />
-              <Metric label="Selected to export" value={selectedLeads.length} />
+              <Metric label="Leads found" value={leads.length} />
+              <Metric label="Categories" value={categories.length} />
+              <Metric label="Selected to export" value={selectedRows.length} />
               <Metric label="Date range" value={`${s.loaded.from} – ${s.loaded.to}`} />
             </div>
 
-            {s.loaded.leads.length ? (
+            {leads.length ? (
               <>
-                {unexportable > 0 && (
+                <div className="max-w-sm">
+                  <Select label="Category" value={s.category} options={categoryOptions} format={formatCategory}
+                    onChange={(category) => set({ category })} />
+                </div>
+                {unreachable > 0 && (
                   <Alert kind="warning">
-                    {unexportable} lead(s) have no email or last name, which Zoho CRM requires, so they are not selected.
+                    {unreachable} lead(s) have no email or phone, so they are not selected. You can still tick them.
                   </Alert>
                 )}
                 <Checkbox
-                  label={`Select all ${s.loaded.leads.length} leads`}
-                  checked={selectedLeads.length === s.loaded.leads.length}
-                  onChange={(v) => set({ selected: s.loaded!.leads.map(() => v) })}
+                  label={`Select all ${visible.length} leads`}
+                  checked={visible.length > 0 && selectedRows.length === visible.length}
+                  onChange={(v) => set((st) => ({ selected: st.selected.map((x, i) => (visible.includes(i) ? v : x)) }))}
                 />
                 <DataTable
-                  rows={s.loaded.leads}
-                  columns={["email", "first_name", "last_name", "phone", "created", "bitrix_lead_id"]}
-                  selected={s.selected}
-                  onSelectedChange={(selected) => set({ selected })}
+                  rows={visible.map((i) => {
+                    const l = leads[i];
+                    return {
+                      name: [firstName(l), lastName(l)].filter(Boolean).join(" ") || clean(l.title) || "",
+                      email: email(l) ?? "",
+                      phone: phone(l) ?? "",
+                      category: l.category ?? "",
+                      stage: l.stageId ?? "",
+                      // Bitrix returns the portal's local time, e.g. 2026-09-06T22:43:48+03:00.
+                      created: l.createdTime?.slice(0, 16).replace("T", " ") ?? "",
+                      bitrix_lead_id: l.id,
+                      lead_hub: s.exported.includes(l.id) ? "Exported" : "",
+                    };
+                  })}
+                  columns={["name", "email", "phone", "category", "stage", "created", "bitrix_lead_id", "lead_hub"]}
+                  selected={visible.map((i) => s.selected[i])}
+                  onSelectedChange={(shown) =>
+                    set((st) => ({ selected: st.selected.map((x, i) => (visible.includes(i) ? shown[visible.indexOf(i)] : x)) }))}
                 />
               </>
             ) : (
-              <Alert>No leads were submitted through this form in this date range.</Alert>
+              <Alert>No leads were created in Bitrix24 in this date range.</Alert>
             )}
 
-            {s.exportResult && (
-              <>
-                <div className="grid gap-4 sm:grid-cols-3">
-                  <Metric label="Exported" value={s.exportResult.total} />
-                  <Metric label="Succeeded" value={s.exportResult.succeeded} />
-                  <Metric label="Failed" value={s.exportResult.failed} />
-                </div>
-                <DataTable
-                  rows={s.exportResult.results.map((r) => ({
-                    email: r.email ?? "",
-                    status: r.status,
-                    lead: stageText(r.lead),
-                    campaigns: stageText(r.campaigns),
-                    error: r.error ?? "",
-                  }))}
-                />
-              </>
-            )}
-
-            {s.loaded.leads.length > 0 && (
-              <div className="space-y-4 border-t border-line pt-4">
-                <div className="grid gap-4 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
-                  <Select
-                    label="Zoho Campaigns list"
-                    value={s.listChoice}
-                    options={listOptions}
-                    format={formatList}
-                    onChange={(v) => set({ listChoice: v })}
-                  />
-                  {creatingList ? (
-                    <TextInput
-                      label="New list name"
-                      value={s.newListName}
-                      placeholder="e.g. Bitrix newsletter leads September 2026"
-                      onChange={(v) => set({ newListName: v })}
-                    />
-                  ) : (
-                    <div />
-                  )}
-                  <Button icon={RefreshCw} loading={loadingLists} onClick={loadLists}>
-                    Refresh lists
+            {visible.length > 0 && (
+              <div className="flex flex-col gap-3 border-t border-line pt-4 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-sm text-muted">
+                  Leads are not saved until you export them. Review them, then export the ones you approve to the Lead Hub.
+                </p>
+                <div className="flex shrink-0 flex-wrap gap-3">
+                  <Button icon={Download} disabled={!selectedRows.length} onClick={downloadSelected}>
+                    Download JSON
                   </Button>
-                </div>
-                <div className="flex flex-col items-end gap-3">
-                  {exportHint && <Alert kind="warning">{exportHint}</Alert>}
-                  <Button variant="primary" icon={CloudUpload} loading={exporting} disabled={loading} onClick={exportToZoho}>
-                    Export {selectedLeads.length} to Zoho
+                  <Button icon={DatabaseZap} disabled={loading || exporting} onClick={() => exportToHub(visible)}>
+                    Export all {visible.length}
+                  </Button>
+                  <Button variant="primary" icon={DatabaseZap} loading={exporting}
+                    disabled={loading || !selectedRows.length}
+                    onClick={() => exportToHub(selectedRows)}>
+                    Export to Lead Hub ({selectedRows.length})
                   </Button>
                 </div>
               </div>
@@ -309,7 +227,7 @@ export function BitrixExport() {
           </div>
         </Card>
       ) : (
-        <Alert>Pick a form and a date range, then click &ldquo;Get leads&rdquo; to review them here.</Alert>
+        <Alert>Pick a date range, then click &ldquo;Get leads&rdquo; to review them here.</Alert>
       )}
     </div>
   );

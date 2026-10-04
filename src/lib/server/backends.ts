@@ -40,3 +40,11 @@ export function bitrixExportBackendUrl(): string {
 export function bitrixExportApiKey(): string | undefined {
   return process.env.BITRIX_EXPORT_API_KEY || undefined;
 }
+
+/** Lead Hub (where every lead source lands its leads; AWS RDS):
+ * LEAD_HUB_BACKEND_URL only. Unset until its backend is deployed; sources then
+ * can't send leads to it yet. */
+export function leadHubBackendUrl(): string | undefined {
+  const url = process.env.LEAD_HUB_BACKEND_URL?.trim();
+  return url ? trim(url) : undefined;
+}

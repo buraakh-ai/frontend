@@ -1,14 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
-  Building2, Download, FileText, History, RefreshCw, Rocket, Send, SlidersHorizontal, Sparkles, Zap,
+  Building2, Download, FileText, History, RefreshCw, Rocket, Send, SlidersHorizontal, Sparkles, X, Zap,
 } from "lucide-react";
 import { callApi } from "@/lib/backend-result";
 import { createStore } from "@/lib/store";
+import { zip } from "@/lib/zip";
 import {
   Alert, Button, Card, Checkbox, ChipSelect, DataTable, Expander, Metric, NumberInput, PageHeader, Select,
-  Tabs, TextArea, TextInput, downloadText,
+  Stepper, Tabs, TextArea, TextInput, downloadBlob, downloadText,
 } from "@/components/ui";
 
 const PLATFORMS = [
@@ -45,11 +46,62 @@ type ProviderFailed = { failed_provider: string; next_provider_label: string; ne
 type Draft = Dict & { _daily_budget: number; _days: number };
 type TabId = "generate" | "review" | "publish";
 type Notice = { kind: "success" | "error" | "warning"; text: string } | null;
+type Form = { companyUrl: string; companyName: string; productDescription: string; adIdea: string; eventContext: string; contactUrl: string };
+type Brand = { tone: string; audience: string; colors: string[] };
+type SavedDraft = {
+  id: string;
+  savedAt: number;
+  form: Form;
+  platforms: string[];
+  campaign: Campaign | null;
+  captions: Record<string, string>;
+  image: AdImage | null;
+};
+
+const EVENT_SUGGESTIONS = ["Interest rates", "Year-end planning", "Tax deadlines"];
+
+// Overrides brand_tone / target_audience in the company details sent to the
+// image endpoint, so the poster follows the house style.
+const DEFAULT_BRAND: Brand = {
+  tone: "Professional, advisory, trustworthy",
+  audience: "Business owners and cross-border families",
+  colors: ["#03045e", "#fa5f11", "#c9a94e"],
+};
+
+// Drafts and the brand profile are kept in this browser only.
+const LS_DRAFTS = "adStudio.drafts";
+const LS_BRAND = "adStudio.brand";
+const MAX_DRAFTS = 20;
+
+function readLocal<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeLocal(key: string, value: unknown) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Storage full or blocked: the in-memory copy still works for this tab.
+  }
+}
+
+const draftTitle = (d: SavedDraft) =>
+  d.campaign?.ads?.image_headline || d.form.adIdea || d.form.companyName || "Untitled draft";
+const draftEvent = (d: SavedDraft) => d.campaign?.detected_event || d.form.eventContext || "Not generated yet";
 
 const store = createStore({
   initialized: false,
   tab: "generate" as TabId,
-  form: { companyUrl: "", companyName: "", productDescription: "", adIdea: "", eventContext: "", contactUrl: "" },
+  form: { companyUrl: "", companyName: "", productDescription: "", adIdea: "", eventContext: "", contactUrl: "" } as Form,
+  platforms: PLATFORMS.map((p) => p.key) as string[],
+  brand: DEFAULT_BRAND,
+  drafts: [] as SavedDraft[],
+  draftId: null as string | null,
   campaign: null as Campaign | null,
   captions: {} as Record<string, string>,
   image: null as AdImage | null,
@@ -61,15 +113,6 @@ const store = createStore({
 
 const scoreColor = (s: number) => (s >= 8 ? "text-success" : s >= 5 ? "text-warning" : "text-danger");
 const money = (n: number) => `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-
-function PlatformName({ label, color }: { label: string; color: string }) {
-  return (
-    <div className="flex items-center gap-2 text-sm font-semibold text-navy">
-      <span className="size-2.5 shrink-0 rounded-full" style={{ background: color }} />
-      {label}
-    </div>
-  );
-}
 
 function NoticeLine({ notice }: { notice: Notice }) {
   return notice ? <Alert kind={notice.kind}>{notice.text}</Alert> : null;
@@ -84,12 +127,60 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
   const [notices, setNotices] = useState<Record<string, Notice>>({});
   const notify = (key: string, notice: Notice) => setNotices((n) => ({ ...n, [key]: notice }));
 
-  // Prefill the form once per tab session from the server's DEFAULT_* env.
+  // Prefill the form once per tab session from the server's DEFAULT_* env,
+  // and load this browser's saved drafts and brand profile.
   useEffect(() => {
     if (!store.get().initialized) {
-      store.set((st) => ({ initialized: true, form: { ...st.form, ...defaults } }));
+      store.set((st) => ({
+        initialized: true,
+        form: { ...st.form, ...defaults },
+        drafts: readLocal<SavedDraft[]>(LS_DRAFTS, []),
+        brand: readLocal<Brand>(LS_BRAND, DEFAULT_BRAND),
+      }));
     }
   }, [defaults]);
+
+  // Upserts the current brief/campaign as the active draft.
+  function saveDraft() {
+    const st = store.get();
+    const draft: SavedDraft = {
+      id: st.draftId ?? crypto.randomUUID(),
+      savedAt: Date.now(),
+      form: st.form,
+      platforms: st.platforms,
+      campaign: st.campaign,
+      captions: st.captions,
+      image: st.image,
+    };
+    const drafts = [draft, ...st.drafts.filter((d) => d.id !== draft.id)].slice(0, MAX_DRAFTS);
+    writeLocal(LS_DRAFTS, drafts);
+    store.set({ drafts, draftId: draft.id });
+  }
+
+  function loadDraft(d: SavedDraft) {
+    set({
+      form: d.form,
+      platforms: d.platforms,
+      campaign: d.campaign,
+      captions: d.captions,
+      image: d.image,
+      providerFailed: null,
+      draftId: d.id,
+      tab: d.campaign ? "review" : "generate",
+    });
+    setNotices({});
+  }
+
+  function deleteDraft(id: string) {
+    const drafts = s.drafts.filter((d) => d.id !== id);
+    writeLocal(LS_DRAFTS, drafts);
+    set((st) => ({ drafts, draftId: st.draftId === id ? null : st.draftId }));
+  }
+
+  function saveBrand(brand: Brand) {
+    writeLocal(LS_BRAND, brand);
+    set({ brand });
+  }
 
   const { form, campaign } = s;
   const setForm = (patch: Partial<typeof form>) => set((st) => ({ form: { ...st.form, ...patch } }));
@@ -108,6 +199,7 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
   }
 
   async function generateImage(c: Campaign, customPrompt = "") {
+    const { brand } = store.get();
     const cDetails = c.company_details ?? {};
     const cAds = c.ads ?? {};
     try {
@@ -116,7 +208,11 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
         instagram_copy: cAds.instagram ?? "",
         image_headline: cAds.image_headline ?? "",
         event_context: c.detected_event ?? "",
-        company_details: cDetails,
+        company_details: {
+          ...cDetails,
+          brand_tone: brand.tone || cDetails.brand_tone,
+          target_audience: brand.audience || cDetails.target_audience,
+        },
         logo_url: cDetails.logo_url,
         custom_prompt: customPrompt,
         contact_url: effectiveContactUrl(c),
@@ -124,6 +220,7 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
       if (data.success && typeof data.clean_image_url === "string") {
         set({ image: data as unknown as AdImage, providerFailed: null });
         notify("image", null);
+        saveDraft();
       } else if (data.success) {
         notify("image", { kind: "error", text: "The backend reported success but returned no image." });
       } else if (data.provider_failed) {
@@ -140,22 +237,49 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
   const setCampaign = (data: Campaign) =>
     set({ campaign: data, image: null, captions: { ...(data.ads ?? {}) } });
 
+  const requestCampaign = (eventContext: string) =>
+    callApi<Campaign>("ad", "generate", {
+      company_name: form.companyName,
+      product_description: form.productDescription,
+      ad_idea: form.adIdea,
+      event_context: eventContext || null,
+      company_url: form.companyUrl || null,
+    });
+
+  const setCaption = (key: string, text: string) => {
+    set((st) => ({ captions: { ...st.captions, [key]: text } }));
+    saveDraft();
+  };
+
+  // The backend has no per-caption rewrite, so this re-runs generation with the
+  // same brief and event and keeps only this platform's new caption.
+  const rewriteCaption = (key: string) =>
+    run(`rewrite-${key}`, async () => {
+      notify("captions", null);
+      try {
+        const data = await requestCampaign(campaign?.detected_event || form.eventContext);
+        const text = data.success ? data.ads?.[key] : undefined;
+        if (text) setCaption(key, text);
+        else notify("captions", { kind: "error", text: `Could not rewrite the caption: ${data.error ?? "no caption returned"}` });
+      } catch (e) {
+        notify("captions", { kind: "error", text: `Something went wrong rewriting the caption: ${(e as Error).message}` });
+      }
+    });
+
   const onGenerate = () =>
     run("generate", async () => {
-      if (!form.companyName && !form.companyUrl) {
-        notify("generate", { kind: "error", text: "Please fill in at least the company name or website URL." });
+      if (!form.companyName.trim()) {
+        notify("generate", { kind: "error", text: "Please enter the company name." });
+        return;
+      }
+      if (!s.platforms.length) {
+        notify("generate", { kind: "error", text: "Pick at least one platform." });
         return;
       }
       notify("generate", null);
       let data: Campaign;
       try {
-        data = await callApi<Campaign>("ad", "generate", {
-          company_name: form.companyName,
-          product_description: form.productDescription,
-          ad_idea: form.adIdea,
-          event_context: form.eventContext || null,
-          company_url: form.companyUrl || null,
-        });
+        data = await requestCampaign(form.eventContext);
       } catch (e) {
         notify("generate", { kind: "error", text: `Something went wrong talking to the backend: ${(e as Error).message}` });
         return;
@@ -164,6 +288,8 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
         notify("generate", { kind: "error", text: `All text generation providers are exhausted: ${data.error}` });
       } else if (data.success) {
         setCampaign(data);
+        set({ tab: "review" });
+        saveDraft();
         setBusy("generate-image");
         await generateImage(data);
       } else {
@@ -173,125 +299,188 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
 
   return (
     <>
-      <PageHeader
-        title="Ad generator"
-        subtitle="Research a company, tie the campaign to a real event, and generate ad copy + images."
-      />
-      <Tabs
-        tabs={[
-          { id: "generate", label: "1. Generate" },
-          { id: "review", label: "2. Review copy" },
-          { id: "publish", label: "3. Image & publish" },
+      {s.tab !== "generate" && campaign ? (
+        <PageHeader
+          eyebrow="Create · Ad Studio"
+          title={campaign.ads?.image_headline || companyName}
+          subtitle={s.tab === "review"
+            ? `${companyName} · Draft saved automatically`
+            : "Generate the ad image, then publish or download."}
+          actions={s.tab === "review" ? (
+            <>
+              <Button onClick={() => set({ tab: "generate" })}>Edit brief</Button>
+              <Button variant="primary" onClick={() => set({ tab: "publish" })}>Continue to image</Button>
+            </>
+          ) : (
+            <Button onClick={() => set({ tab: "review" })}>Back to copy</Button>
+          )}
+        />
+      ) : (
+        <PageHeader
+          eyebrow="Create"
+          title="Ad Studio"
+          subtitle="Research a company, tie the campaign to a real event, and generate ad copy and images."
+          actions={<Button disabled title="Coming soon">Campaign Library</Button>}
+        />
+      )}
+      <Stepper
+        steps={[
+          { id: "generate", label: "Brief" },
+          { id: "review", label: "Review copy", disabled: !campaign },
+          { id: "publish", label: "Image & publish", disabled: !campaign },
         ]}
         active={s.tab}
         onChange={(tab) => set({ tab })}
       />
 
       {s.tab === "generate" && (
-        <div className="space-y-5">
-          <Card title="Start a new campaign" subtitle="Paste your website. Get platform-ready ad copy tied to a real world event.">
+        <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
+          <Card title="Campaign brief" subtitle="Only the company name is required. Everything else sharpens the result.">
             <form
-              className="space-y-4"
+              className="space-y-5"
               onSubmit={(e) => {
                 e.preventDefault();
                 onGenerate();
               }}
             >
               <div className="grid gap-4 md:grid-cols-2">
-                <TextInput label="Company website URL (optional)" placeholder="https://www.nike.com"
+                <TextInput label="Company website" placeholder="https://www.agfintax.com/"
                   value={form.companyUrl} onChange={(v) => setForm({ companyUrl: v })} />
-                <TextInput label="Company name" placeholder="Nike"
+                <TextInput label="Company name *" placeholder="AGFinTax"
                   value={form.companyName} onChange={(v) => setForm({ companyName: v })} />
               </div>
-              <TextArea label="What does your product do? (optional — auto-filled from URL)"
+              <TextArea label="What does the company do?" placeholder="Auto-filled from the website if left blank"
                 value={form.productDescription} onChange={(v) => setForm({ productDescription: v })} />
               <div className="grid gap-4 md:grid-cols-2">
-                <TextArea label="Your ad idea or angle (optional)"
+                <TextArea label="Ad idea or angle" placeholder="e.g. Year-end tax moves for small business owners"
                   value={form.adIdea} onChange={(v) => setForm({ adIdea: v })} />
-                <TextInput label="Current event to connect to (optional)" placeholder="2026 World Cup, Diwali, ..."
-                  value={form.eventContext} onChange={(v) => setForm({ eventContext: v })} />
+                <div className="space-y-2.5">
+                  <TextInput label="Current event to connect to" placeholder="Leave blank and AI picks a trending event"
+                    value={form.eventContext} onChange={(v) => setForm({ eventContext: v })} />
+                  <div className="flex flex-wrap gap-2">
+                    {EVENT_SUGGESTIONS.map((ev) => (
+                      <button key={ev} type="button" onClick={() => setForm({ eventContext: ev })}
+                        className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+                          form.eventContext === ev
+                            ? "border-accent/40 bg-accent/10 text-accent"
+                            : "border-line bg-canvas text-navy hover:border-navy/30"
+                        }`}>
+                        {ev}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
+              <fieldset>
+                <legend className="mb-1.5 text-sm font-medium text-navy">Platforms</legend>
+                <div className="flex flex-wrap gap-3">
+                  {PLATFORMS.map((p) => (
+                    <label key={p.key}
+                      className="flex cursor-pointer items-center gap-2.5 rounded-lg border border-line bg-white px-3.5 py-2.5 text-sm text-navy transition-colors hover:border-navy/30">
+                      <input type="checkbox" className="size-4 accent-accent"
+                        checked={s.platforms.includes(p.key)}
+                        onChange={(e) => set((st) => ({
+                          platforms: e.target.checked
+                            ? PLATFORMS.map((x) => x.key as string).filter((k) => k === p.key || st.platforms.includes(k))
+                            : st.platforms.filter((k) => k !== p.key),
+                        }))} />
+                      {p.label}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
               <TextInput
-                label="Contact URL for the ad's call-to-action (optional)"
-                placeholder="https://yoursite.com/contact"
-                hint="Printed as small plain text on the image in place of a CTA button — a generated image can't actually be clickable. Leave blank to use the company website URL above."
+                label="Call-to-action URL"
+                placeholder="https://www.agfintax.com/contact/"
+                hint="Printed as plain text on the image. Leave blank to use the website URL."
                 value={form.contactUrl}
                 onChange={(v) => setForm({ contactUrl: v })}
               />
-              <Button type="submit" variant="primary" icon={Zap} block
-                loading={busy === "generate" || busy === "generate-image"}>
-                {busy === "generate-image" ? "Generating your ad image…" : busy === "generate"
-                  ? "Researching company, detecting the best event, and writing your ad copy…" : "Generate ads"}
-              </Button>
+              <NoticeLine notice={notices.generate ?? null} />
+              <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                <Button onClick={() => {
+                  saveDraft();
+                  notify("generate", { kind: "success", text: "Draft saved." });
+                }}>
+                  Save draft
+                </Button>
+                <Button type="submit" variant="primary" icon={Zap}
+                  loading={busy === "generate" || busy === "generate-image"}>
+                  {busy === "generate-image" ? "Generating ad image…" : busy === "generate"
+                    ? "Researching and writing…" : "Generate campaign"}
+                </Button>
+              </div>
             </form>
           </Card>
-          <NoticeLine notice={notices.generate ?? null} />
-          {campaign && (
-            <>
-              <Alert kind="success">
-                Campaign ready for <strong>{companyName}</strong> — open the <strong>Review copy</strong> tab to see
-                it, or <strong>Image &amp; publish</strong> to generate the ad image.
-              </Alert>
-              <div className="grid gap-4 sm:grid-cols-3">
-                <Metric label="Detected event" value={campaign.detected_event || "—"} />
-                <Metric label="Quality score" value={`${campaign.quality_score ?? 0}/10`} />
-                <Metric label="Platforms generated" value={PLATFORMS.length} />
-              </div>
-            </>
-          )}
+
+          <aside className="space-y-6">
+            <BrandProfileCard brand={s.brand} onSave={saveBrand} />
+            <SideCard title="What happens next">
+              <ol className="list-decimal space-y-2 pl-4 text-sm text-ink marker:text-muted">
+                <li>We research the company and find a relevant current event.</li>
+                <li>You review and edit captions for each platform.</li>
+                <li>Generate the ad image, then publish or download.</li>
+              </ol>
+            </SideCard>
+            <RecentDrafts drafts={s.drafts} activeId={s.draftId} onOpen={loadDraft} onDelete={deleteDraft} />
+          </aside>
         </div>
       )}
 
       {s.tab === "review" && (
         !campaign ? (
-          <Alert>Generate a campaign in the <strong>Generate</strong> tab first.</Alert>
+          <Alert>Generate a campaign from the <strong>Brief</strong> step first.</Alert>
         ) : (
           <div className="space-y-5">
-            {campaign.detected_event && (
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                <div className="flex-1">
-                  <Alert>Event used: <strong>{campaign.detected_event}</strong></Alert>
-                </div>
-                <Button icon={RefreshCw} loading={busy === "retry"} onClick={() =>
-                  run("retry", async () => {
-                    try {
-                      const data = await callApi<Campaign>("ad", "retry-event", {
-                        company_name: companyName,
-                        company_url: form.companyUrl,
-                      });
-                      if (data.success) {
-                        setCampaign(data);
-                        notify("retry", null);
-                      } else {
-                        notify("retry", { kind: "error", text: `Could not get a new event: ${data.error}` });
-                      }
-                    } catch (e) {
-                      notify("retry", { kind: "error", text: `Something went wrong retrying the event: ${(e as Error).message}` });
+            <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
+              <section className={`rounded-xl border border-ocean/15 bg-tint p-5 ${campaign.quality_score ? "" : "lg:col-span-2"}`}>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-navy/70">Event used</div>
+                  <button
+                    type="button"
+                    disabled={busy === "retry"}
+                    onClick={() =>
+                      run("retry", async () => {
+                        try {
+                          const data = await callApi<Campaign>("ad", "retry-event", {
+                            company_name: companyName,
+                            company_url: form.companyUrl,
+                          });
+                          if (data.success) {
+                            setCampaign(data);
+                            saveDraft();
+                            notify("retry", null);
+                          } else {
+                            notify("retry", { kind: "error", text: `Could not get a new event: ${data.error}` });
+                          }
+                        } catch (e) {
+                          notify("retry", { kind: "error", text: `Something went wrong retrying the event: ${(e as Error).message}` });
+                        }
+                      })
                     }
-                  })
-                }>
-                  Try different event
-                </Button>
-              </div>
-            )}
-            <NoticeLine notice={notices.retry ?? null} />
-
-            {!!campaign.quality_score && (
-              <Card>
-                <div className="flex items-center gap-6">
-                  <div className="text-center">
-                    <div className={`font-display text-3xl font-extrabold ${scoreColor(campaign.quality_score)}`}>
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-navy/20 bg-white/70 px-3 py-1 text-xs font-semibold text-navy hover:bg-white disabled:opacity-60"
+                  >
+                    <RefreshCw className={`size-3.5 ${busy === "retry" ? "animate-spin" : ""}`} aria-hidden />
+                    {busy === "retry" ? "Finding a new event…" : "Try another event"}
+                  </button>
+                </div>
+                <p className="mt-2 text-[15px] font-medium leading-relaxed text-navy">
+                  {campaign.detected_event || "No specific event was used."}
+                </p>
+              </section>
+              {!!campaign.quality_score && (
+                <section className="flex items-center gap-5 rounded-xl border border-line bg-white p-5 shadow-sm">
+                  <div className="shrink-0 text-center">
+                    <div className={`font-display text-4xl font-extrabold ${scoreColor(campaign.quality_score)}`}>
                       {campaign.quality_score}/10
                     </div>
-                    <div className="text-[11px] font-bold uppercase tracking-wider text-muted">Quality</div>
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-muted">Quality</div>
                   </div>
-                  <div>
-                    <div className="font-semibold text-navy">Ad quality report</div>
-                    <p className="mt-1 text-sm text-muted">{campaign.quality_reason}</p>
-                  </div>
-                </div>
-              </Card>
-            )}
+                  <p className="text-xs leading-relaxed text-muted">{campaign.quality_reason}</p>
+                </section>
+              )}
+            </div>
+            <NoticeLine notice={notices.retry ?? null} />
 
             {Object.keys(details).length > 0 && (
               <Expander title="Company details used in generation" icon={Building2}>
@@ -299,56 +488,54 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
               </Expander>
             )}
 
-            <Card title="Platform captions" subtitle="Edit any caption here; your edits are what gets downloaded and posted.">
-              <div className="divide-y divide-line">
-                {PLATFORMS.map((p) => (
-                  <div key={p.key} className="grid gap-3 py-4 first:pt-0 last:pb-0 md:grid-cols-[150px_1fr_auto] md:items-start">
-                    <div className="md:pt-2"><PlatformName label={p.label} color={p.color} /></div>
-                    <textarea
-                      aria-label={`${p.label} caption`}
-                      rows={4}
-                      value={s.captions[p.key] ?? ""}
-                      onChange={(e) => set((st) => ({ captions: { ...st.captions, [p.key]: e.target.value } }))}
-                      className="w-full rounded-md border border-line px-3 py-2 text-sm focus:border-ocean focus:outline-none focus:ring-2 focus:ring-ocean/20"
-                    />
-                    <Button icon={Download} onClick={() => downloadText(`${p.key}_caption.txt`, s.captions[p.key] ?? "")}>
-                      Download
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            </Card>
+            <CaptionsPanel
+              platforms={PLATFORMS.filter((p) => s.platforms.includes(p.key))}
+              captions={s.captions}
+              busy={busy}
+              notice={notices.captions ?? null}
+              onChange={setCaption}
+              onRewrite={rewriteCaption}
+            />
           </div>
         )
       )}
 
       {s.tab === "publish" && (
         !campaign ? (
-          <Alert>Generate a campaign in the <strong>Generate</strong> tab first.</Alert>
+          <Alert>Generate a campaign from the <strong>Brief</strong> step first.</Alert>
         ) : (
-          <div className="space-y-5">
-            <ImageCard
-              image={s.image}
-              providerFailed={s.providerFailed}
-              busy={busy}
-              notice={notices.image ?? null}
-              onGenerate={(customPrompt) => run("image", () => generateImage(campaign, customPrompt))}
-              onSwitchProvider={(p) => run("switch", async () => {
-                try {
-                  await callApi("ad", "switch-image-provider", { provider: p.next_provider_name });
-                  set({ providerFailed: null });
-                } catch (e) {
-                  notify("image", { kind: "error", text: (e as Error).message });
-                }
-              })}
-            />
-            {s.image && (
-              <PostCard
-                imageUrl={s.image.clean_image_url}
-                captions={s.captions}
-                onLinkedInPosted={(urn) => set({ linkedinPostUrn: urn })}
+          <div className="space-y-6">
+            <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
+              <ImageCard
+                image={s.image}
+                providerFailed={s.providerFailed}
+                busy={busy === "generate-image" ? "image" : busy}
+                notice={notices.image ?? null}
+                background={s.brand.colors[0] ?? DEFAULT_BRAND.colors[0]}
+                onGenerate={(customPrompt) => run("image", () => generateImage(campaign, customPrompt))}
+                onSwitchProvider={(p) => run("switch", async () => {
+                  try {
+                    await callApi("ad", "switch-image-provider", { provider: p.next_provider_name });
+                    set({ providerFailed: null });
+                  } catch (e) {
+                    notify("image", { kind: "error", text: (e as Error).message });
+                  }
+                })}
               />
-            )}
+              <aside className="space-y-6">
+                <PublishCard
+                  imageUrl={s.image?.clean_image_url ?? null}
+                  captions={s.captions}
+                  platforms={s.platforms}
+                  onLinkedInPosted={(urn) => set({ linkedinPostUrn: urn })}
+                />
+                <NotPostingCard
+                  image={s.image}
+                  captionsFile={captionsFile(PLATFORMS.filter((p) => s.platforms.includes(p.key)), s.captions)}
+                  onSave={saveDraft}
+                />
+              </aside>
+            </div>
             {s.image && showPaidPromotion && (
               <PaidPromotionCard
                 imageUrl={s.image.clean_image_url}
@@ -364,118 +551,489 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
   );
 }
 
-function ImageCard({ image, providerFailed, busy, notice, onGenerate, onSwitchProvider }: {
+const captionsFile = (platforms: readonly { key: string; label: string }[], captions: Record<string, string>) =>
+  platforms.map((p) => `${p.label}\n${"-".repeat(p.label.length)}\n${captions[p.key] ?? ""}`).join("\n\n");
+
+const hashtags = (text: string) => [...new Set(text.match(/#[\p{L}\p{N}_]+/gu) ?? [])];
+
+function CaptionsPanel({ platforms, captions, busy, notice, onChange, onRewrite }: {
+  platforms: readonly (typeof PLATFORMS)[number][];
+  captions: Record<string, string>;
+  busy: string | null;
+  notice: Notice;
+  onChange: (key: string, text: string) => void;
+  onRewrite: (key: string) => void;
+}) {
+  const [selected, setSelected] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const active = platforms.find((p) => p.key === selected) ?? platforms[0];
+  if (!active) return <Alert>No platforms selected — pick at least one in the brief.</Alert>;
+  const text = captions[active.key] ?? "";
+  const rewriting = busy === `rewrite-${active.key}`;
+
+  return (
+    <section className="grid overflow-hidden rounded-xl border border-line bg-white shadow-sm md:grid-cols-[200px_minmax(0,1fr)]">
+      <nav className="border-b border-line bg-canvas/60 p-3 md:border-r md:border-b-0">
+        <div className="px-2 pt-1 pb-2 text-[11px] font-bold uppercase tracking-wider text-muted">Platform captions</div>
+        <ul className="flex gap-1 overflow-x-auto md:flex-col">
+          {platforms.map((p) => (
+            <li key={p.key}>
+              <button
+                type="button"
+                onClick={() => setSelected(p.key)}
+                aria-current={p.key === active.key ? "true" : undefined}
+                className={`flex w-full items-center gap-2.5 whitespace-nowrap rounded-md px-2.5 py-2 text-left text-sm transition-colors ${
+                  p.key === active.key ? "bg-white font-semibold text-navy shadow-sm" : "text-ink hover:bg-white/70"
+                }`}
+              >
+                <span className="size-2 shrink-0 rounded-full" style={{ background: p.color }} />
+                {p.label}
+              </button>
+            </li>
+          ))}
+        </ul>
+      </nav>
+
+      <div className="space-y-3 p-5">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="text-lg font-bold">{active.label} caption</h2>
+          <span className="text-xs text-muted">Your edits are what gets downloaded and posted</span>
+        </div>
+        <textarea
+          aria-label={`${active.label} caption`}
+          rows={7}
+          value={text}
+          disabled={rewriting}
+          onChange={(e) => onChange(active.key, e.target.value)}
+          className="w-full rounded-lg border border-line px-3.5 py-3 text-sm leading-relaxed focus:border-ocean focus:outline-none focus:ring-2 focus:ring-ocean/20 disabled:bg-canvas"
+        />
+        <div className="flex flex-wrap items-center gap-2">
+          {hashtags(text).map((tag) => (
+            <span key={tag} className="rounded-md bg-canvas px-2 py-1 text-xs font-medium text-navy">{tag}</span>
+          ))}
+          <div className="ml-auto flex gap-2">
+            <Button loading={rewriting} disabled={!!busy && !rewriting} onClick={() => onRewrite(active.key)}>
+              {rewriting ? "Rewriting…" : "Rewrite"}
+            </Button>
+            <Button onClick={async () => {
+              try {
+                await navigator.clipboard.writeText(text);
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1500);
+              } catch {
+                // Clipboard blocked: nothing to do, the text is still selectable.
+              }
+            }}>
+              {copied ? "Copied" : "Copy"}
+            </Button>
+            <Button onClick={() => downloadText(`${active.key}_caption.txt`, text)}>Download</Button>
+          </div>
+        </div>
+        <NoticeLine notice={notice} />
+        <div className="flex flex-col gap-3 rounded-lg bg-canvas px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <span className="text-sm text-muted">Happy with every caption? Download them all as one file.</span>
+          <Button onClick={() => downloadText("captions.txt", captionsFile(platforms, captions))}>
+            Download all captions
+          </Button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function SideCard({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
+  return (
+    <section className="rounded-xl border border-line bg-white p-5 shadow-sm">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h2 className="text-lg font-bold">{title}</h2>
+        {action}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+const linkButton = "text-sm font-semibold text-accent hover:text-accent-dark";
+
+function BrandProfileCard({ brand, onSave }: { brand: Brand; onSave: (b: Brand) => void }) {
+  const [edit, setEdit] = useState<Brand | null>(null);
+  const label = "text-[11px] font-bold uppercase tracking-wider text-muted";
+
+  if (edit) {
+    return (
+      <SideCard title="Brand profile">
+        <div className="space-y-3">
+          <TextInput label="Tone" value={edit.tone} onChange={(tone) => setEdit({ ...edit, tone })} />
+          <TextInput label="Audience" value={edit.audience} onChange={(audience) => setEdit({ ...edit, audience })} />
+          <div>
+            <div className="mb-1.5 text-sm font-medium text-navy">Colors</div>
+            <div className="flex gap-2">
+              {edit.colors.map((c, i) => (
+                <input key={i} type="color" value={c} aria-label={`Brand color ${i + 1}`}
+                  onChange={(e) => setEdit({ ...edit, colors: edit.colors.map((x, j) => (j === i ? e.target.value : x)) })}
+                  className="size-8 cursor-pointer rounded border border-line bg-white p-0.5" />
+              ))}
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 pt-1">
+            <Button variant="ghost" onClick={() => setEdit(null)}>Cancel</Button>
+            <Button variant="primary" onClick={() => {
+              onSave(edit);
+              setEdit(null);
+            }}>
+              Save
+            </Button>
+          </div>
+        </div>
+      </SideCard>
+    );
+  }
+
+  return (
+    <SideCard title="Brand profile" action={<button type="button" className={linkButton} onClick={() => setEdit(brand)}>Edit</button>}>
+      <dl className="space-y-3 text-sm">
+        <div>
+          <dt className={label}>Tone</dt>
+          <dd className="mt-0.5 text-ink">{brand.tone || "—"}</dd>
+        </div>
+        <div>
+          <dt className={label}>Audience</dt>
+          <dd className="mt-0.5 text-ink">{brand.audience || "—"}</dd>
+        </div>
+        <div>
+          <dt className={label}>Colors</dt>
+          <dd className="mt-1.5 flex gap-1.5">
+            {brand.colors.map((c, i) => (
+              <span key={i} className="size-5 rounded border border-black/10" style={{ background: c }} title={c} />
+            ))}
+          </dd>
+        </div>
+      </dl>
+    </SideCard>
+  );
+}
+
+function RecentDrafts({ drafts, activeId, onOpen, onDelete }: {
+  drafts: SavedDraft[];
+  activeId: string | null;
+  onOpen: (d: SavedDraft) => void;
+  onDelete: (id: string) => void;
+}) {
+  const [showAll, setShowAll] = useState(false);
+  const shown = showAll ? drafts : drafts.slice(0, 3);
+  return (
+    <SideCard
+      title="Recent drafts"
+      action={drafts.length > 3 && (
+        <button type="button" className={linkButton} onClick={() => setShowAll((v) => !v)}>
+          {showAll ? "Less" : "All"}
+        </button>
+      )}
+    >
+      {!drafts.length ? (
+        <p className="text-sm text-muted">Saved and generated campaigns show up here.</p>
+      ) : (
+        <ul className="-mx-2 divide-y divide-line">
+          {shown.map((d) => (
+            <li key={d.id} className="group flex items-start gap-1">
+              <button type="button" onClick={() => onOpen(d)}
+                className={`min-w-0 flex-1 rounded-md px-2 py-2.5 text-left hover:bg-canvas ${d.id === activeId ? "bg-tint/60" : ""}`}>
+                <div className="truncate text-sm font-semibold text-navy">{draftTitle(d)}</div>
+                <div className="truncate text-xs text-muted">{draftEvent(d)}</div>
+              </button>
+              <button type="button" aria-label="Delete draft" onClick={() => onDelete(d.id)}
+                className="mt-2.5 rounded p-1 text-muted opacity-0 hover:bg-canvas hover:text-danger focus:opacity-100 group-hover:opacity-100">
+                <X className="size-3.5" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </SideCard>
+  );
+}
+
+const RATIOS = {
+  "4:5": { size: [4, 5], frame: "aspect-[4/5] max-w-sm" },
+  "1:1": { size: [1, 1], frame: "aspect-square max-w-sm" },
+  "9:16": { size: [9, 16], frame: "aspect-[9/16] max-w-[290px]" },
+} as const;
+type Ratio = keyof typeof RATIOS;
+
+// The backend renders one size; other ratios are produced by fitting the whole
+// image (nothing cropped) onto a canvas filled with the brand background.
+async function framedImage(src: string, ratio: Ratio, background: string): Promise<Blob> {
+  const img = new Image();
+  img.src = src;
+  await img.decode();
+  const [w, h] = RATIOS[ratio].size;
+  const { naturalWidth: iw, naturalHeight: ih } = img;
+  const [cw, ch] = iw / ih > w / h ? [iw, Math.round((iw * h) / w)] : [Math.round((ih * w) / h), ih];
+  const canvas = Object.assign(document.createElement("canvas"), { width: cw, height: ch });
+  const ctx = canvas.getContext("2d")!;
+  ctx.fillStyle = background;
+  ctx.fillRect(0, 0, cw, ch);
+  ctx.drawImage(img, Math.round((cw - iw) / 2), Math.round((ch - ih) / 2));
+  return new Promise((resolve, reject) =>
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Could not export the image."))), "image/png"),
+  );
+}
+
+const imageName = (image: AdImage) => image.clean_image_url.split("/").pop() || "ad-image.png";
+
+function ImageCard({ image, providerFailed, busy, notice, background, onGenerate, onSwitchProvider }: {
   image: AdImage | null;
   providerFailed: ProviderFailed | null;
   busy: string | null;
   notice: Notice;
+  background: string;
   onGenerate: (customPrompt: string) => void;
   onSwitchProvider: (p: ProviderFailed) => void;
 }) {
+  const [ratio, setRatio] = useState<Ratio>("4:5");
   const [useCustom, setUseCustom] = useState(false);
   const [customPrompt, setCustomPrompt] = useState(image?.prompt ?? "");
+  const [downloadError, setDownloadError] = useState<Notice>(null);
   const src = image ? `/api/ad${image.clean_image_url}` : null;
+  const generating = busy === "image";
 
-  return (
-    <Card title="Ad image">
-      <div className="space-y-4">
-        <Expander title="Customize image prompt" icon={SlidersHorizontal}>
-          <div className="space-y-3">
-            <p className="text-sm text-muted">
-              By default the background scene is written automatically by AI, tailored to your company/event/copy — you
-              don&apos;t need to fill this in. The box below is only for overriding that with your own description.
-            </p>
-            <Checkbox label="Use my own image prompt instead" checked={useCustom} onChange={setUseCustom} />
-            <TextArea label="Describe the image you want" value={customPrompt} onChange={setCustomPrompt} disabled={!useCustom} />
-          </div>
-        </Expander>
-        <Button variant="primary" icon={Sparkles} block loading={busy === "image"}
-          onClick={() => onGenerate(useCustom ? customPrompt : "")}>
-          {busy === "image" ? "Generating image…" : "Generate / regenerate image"}
-        </Button>
-        <NoticeLine notice={notice} />
-        {providerFailed && (
-          <Alert kind="warning">
-            <div className="flex flex-wrap items-center gap-3">
-              <span>
-                {providerFailed.failed_provider} failed. Switch to {providerFailed.next_provider_label} and try again.
-              </span>
-              <Button loading={busy === "switch"} onClick={() => onSwitchProvider(providerFailed)}>
-                Switch to {providerFailed.next_provider_label}
-              </Button>
-            </div>
-          </Alert>
-        )}
-        {image && src && (
-          <div className="space-y-3">
-            {/* eslint-disable-next-line @next/next/no-img-element -- generated on the backend, served via our proxy */}
-            <img src={src} alt="Generated ad" className="mx-auto w-full max-w-xl rounded-lg border border-line" />
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <span className="text-xs text-muted">Image model: {image.provider ?? "openai_image"}</span>
-              <a
-                href={src}
-                download={image.clean_image_url.split("/").pop()}
-                className="inline-flex items-center gap-2 rounded-full border border-navy/25 bg-white px-5 py-2.5 text-xs font-semibold uppercase tracking-wider text-navy hover:border-navy hover:bg-canvas"
-              >
-                <Download className="size-4" /> Download ad image
-              </a>
-            </div>
-            {image.prompt && (
-              <Expander title="Background prompt used (AI-written)" icon={History} defaultOpen>
-                <pre className="whitespace-pre-wrap text-xs text-ink">{image.prompt}</pre>
-              </Expander>
-            )}
-          </div>
-        )}
-      </div>
-    </Card>
-  );
-}
-
-function PostCard({ imageUrl, captions, onLinkedInPosted }: {
-  imageUrl: string;
-  captions: Record<string, string>;
-  onLinkedInPosted: (urn: string) => void;
-}) {
-  const [busy, setBusy] = useState<string | null>(null);
-  const [results, setResults] = useState<Record<string, Notice>>({});
-  const targets = [
-    { key: "instagram", label: "Instagram", color: "#C13584" },
-    { key: "facebook", label: "Facebook", color: "#1877f2" },
-    { key: "linkedin", label: "LinkedIn", color: "#0a66c2" },
-  ];
-
-  async function post(key: string) {
-    setBusy(key);
+  async function download() {
+    if (!image || !src) return;
+    setDownloadError(null);
     try {
-      const r = await callApi<Dict>("ad", `post-to-${key}`, { caption: captions[key] ?? "", image_url: imageUrl });
-      if (r.success) {
-        if (key === "linkedin" && r.post_id) onLinkedInPosted(String(r.post_id));
-        setResults((x) => ({ ...x, [key]: { kind: "success", text: "Posted!" } }));
-      } else {
-        setResults((x) => ({ ...x, [key]: { kind: "error", text: String(r.error) } }));
-      }
+      const blob = await framedImage(src, ratio, background);
+      downloadBlob(imageName(image).replace(/\.\w+$/, "") + `_${ratio.replace(":", "x")}.png`, blob);
     } catch (e) {
-      setResults((x) => ({ ...x, [key]: { kind: "error", text: (e as Error).message } }));
-    } finally {
-      setBusy(null);
+      setDownloadError({ kind: "error", text: `Could not download the image: ${(e as Error).message}` });
     }
   }
 
   return (
-    <Card title="Post to your accounts" subtitle="Review the copy and image above, then approve posting to each platform individually.">
-      <div className="grid gap-4 md:grid-cols-3">
-        {targets.map((t) => (
-          <div key={t.key} className="space-y-3 rounded-lg border border-line p-4">
-            <PlatformName label={t.label} color={t.color} />
-            <Button icon={Send} block loading={busy === t.key} disabled={!!busy && busy !== t.key} onClick={() => post(t.key)}>
-              Post to {t.label}
-            </Button>
-            <NoticeLine notice={results[t.key] ?? null} />
-          </div>
-        ))}
+    <section className="space-y-4 rounded-xl border border-line bg-white p-5 shadow-sm md:p-6">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-xl font-bold">Ad image</h2>
+        <div className="inline-flex rounded-md border border-line bg-canvas p-0.5" role="group" aria-label="Aspect ratio">
+          {(Object.keys(RATIOS) as Ratio[]).map((r) => (
+            <button key={r} type="button" aria-pressed={r === ratio} onClick={() => setRatio(r)}
+              className={`rounded px-2.5 py-1 text-xs font-semibold transition-colors ${
+                r === ratio ? "bg-white text-navy shadow-sm" : "text-muted hover:text-navy"
+              }`}>
+              {r}
+            </button>
+          ))}
+        </div>
       </div>
-    </Card>
+
+      <div className={`relative mx-auto flex w-full items-center justify-center overflow-hidden rounded-lg ${RATIOS[ratio].frame}`}
+        style={{ background: src ? background : undefined }}>
+        {src ? (
+          // eslint-disable-next-line @next/next/no-img-element -- generated on the backend, served via our proxy
+          <img src={src} alt="Generated ad" className={`size-full object-contain ${generating ? "opacity-40" : ""}`} />
+        ) : (
+          <div className="flex size-full flex-col items-center justify-center gap-2 border border-dashed border-line bg-canvas text-sm text-muted">
+            <Sparkles className={`size-6 ${generating ? "animate-pulse text-accent" : ""}`} aria-hidden />
+            {generating ? "Generating your ad image…" : "No image yet"}
+          </div>
+        )}
+        {src && generating && (
+          <div className="absolute inset-0 flex items-center justify-center text-sm font-semibold text-white">
+            Generating a new image…
+          </div>
+        )}
+      </div>
+
+      <div className="flex gap-3">
+        <Button variant="primary" icon={Sparkles} className="flex-1" loading={generating}
+          onClick={() => onGenerate(useCustom ? customPrompt : "")}>
+          {generating ? "Generating image…" : image ? "Regenerate image" : "Generate image"}
+        </Button>
+        <Button icon={Download} disabled={!image || generating} onClick={download}>Download</Button>
+      </div>
+      {image && <p className="text-xs text-muted">Image model: {image.provider ?? "openai_image"}</p>}
+      <NoticeLine notice={notice ?? downloadError} />
+      {providerFailed && (
+        <Alert kind="warning">
+          <div className="flex flex-wrap items-center gap-3">
+            <span>
+              {providerFailed.failed_provider} failed. Switch to {providerFailed.next_provider_label} and try again.
+            </span>
+            <Button loading={busy === "switch"} onClick={() => onSwitchProvider(providerFailed)}>
+              Switch to {providerFailed.next_provider_label}
+            </Button>
+          </div>
+        </Alert>
+      )}
+
+      <Expander title="Customize image prompt" icon={SlidersHorizontal}>
+        <div className="space-y-3">
+          <p className="text-sm text-muted">
+            By default the background scene is written automatically by AI, tailored to your company/event/copy — you
+            don&apos;t need to fill this in. The box below is only for overriding that with your own description.
+          </p>
+          <Checkbox label="Use my own image prompt instead" checked={useCustom} onChange={setUseCustom} />
+          <TextArea label="Describe the image you want" value={customPrompt} onChange={setCustomPrompt} disabled={!useCustom} />
+        </div>
+      </Expander>
+      {image?.prompt && (
+        <Expander title="Background prompt used (AI-written)" icon={History}>
+          <pre className="whitespace-pre-wrap text-xs text-ink">{image.prompt}</pre>
+        </Expander>
+      )}
+    </section>
+  );
+}
+
+// Platforms the backend can post to; the rest can only be downloaded.
+const POST_TARGETS = ["instagram", "facebook", "linkedin"] as const;
+
+type PostState = { status: "posting" | "posted" | "failed"; error?: string };
+
+function PublishCard({ imageUrl, captions, platforms, onLinkedInPosted }: {
+  imageUrl: string | null;
+  captions: Record<string, string>;
+  platforms: string[];
+  onLinkedInPosted: (urn: string) => void;
+}) {
+  const targets = PLATFORMS.filter((p) => (POST_TARGETS as readonly string[]).includes(p.key) && platforms.includes(p.key));
+  const unsupported = PLATFORMS.filter((p) => !(POST_TARGETS as readonly string[]).includes(p.key) && platforms.includes(p.key));
+  const [unchecked, setUnchecked] = useState<Record<string, boolean>>({});
+  const [states, setStates] = useState<Record<string, PostState>>({});
+  const [busy, setBusy] = useState(false);
+  const ready = (key: string) => !!imageUrl && !!captions[key]?.trim();
+  const chosen = targets.filter((t) => !unchecked[t.key] && ready(t.key) && states[t.key]?.status !== "posted");
+
+  async function publish() {
+    setBusy(true);
+    for (const t of chosen) {
+      setStates((x) => ({ ...x, [t.key]: { status: "posting" } }));
+      try {
+        const r = await callApi<Dict>("ad", `post-to-${t.key}`, { caption: captions[t.key] ?? "", image_url: imageUrl });
+        if (r.success) {
+          if (t.key === "linkedin" && r.post_id) onLinkedInPosted(String(r.post_id));
+          setStates((x) => ({ ...x, [t.key]: { status: "posted" } }));
+        } else {
+          setStates((x) => ({ ...x, [t.key]: { status: "failed", error: String(r.error) } }));
+        }
+      } catch (e) {
+        setStates((x) => ({ ...x, [t.key]: { status: "failed", error: (e as Error).message } }));
+      }
+    }
+    setBusy(false);
+  }
+
+  const badge = (key: string) => {
+    const st = states[key]?.status;
+    if (st === "posting") return <span className="text-xs font-semibold text-muted">Posting…</span>;
+    if (st === "posted") return <span className="rounded bg-success/10 px-2 py-0.5 text-xs font-semibold text-success">Posted</span>;
+    if (st === "failed") return <span className="rounded bg-danger/10 px-2 py-0.5 text-xs font-semibold text-danger">Failed</span>;
+    if (!imageUrl) return <span className="text-xs text-muted">Needs image</span>;
+    if (!captions[key]?.trim()) return <span className="text-xs text-muted">No caption</span>;
+    return <span className="rounded bg-success/10 px-2 py-0.5 text-xs font-semibold text-success">Ready</span>;
+  };
+
+  return (
+    <section className="rounded-xl border border-line bg-white p-5 shadow-sm">
+      <h2 className="text-xl font-bold">Publish</h2>
+      <p className="mt-1 text-sm text-muted">Pick the accounts to post to. Each uses its own caption.</p>
+
+      <ul className="mt-4 space-y-2.5">
+        {targets.map((t) => {
+          const st = states[t.key];
+          const disabled = !ready(t.key) || st?.status === "posted" || busy;
+          return (
+            <li key={t.key} className="rounded-lg border border-line px-3.5 py-3">
+              <label className={`flex items-center gap-3 ${disabled ? "" : "cursor-pointer"}`}>
+                <input type="checkbox" className="size-4 shrink-0 accent-accent" disabled={disabled}
+                  checked={!unchecked[t.key] && ready(t.key) && st?.status !== "posted"}
+                  onChange={(e) => setUnchecked((x) => ({ ...x, [t.key]: !e.target.checked }))} />
+                <span className="size-2 shrink-0 rounded-full" style={{ background: t.color }} />
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm font-semibold text-navy">{t.label}</span>
+                  <span className="block truncate text-xs text-muted">{captions[t.key]?.trim() || "—"}</span>
+                </span>
+                {badge(t.key)}
+              </label>
+              {st?.status === "failed" && <p className="mt-2 text-xs text-danger">{st.error}</p>}
+            </li>
+          );
+        })}
+        {unsupported.length > 0 && (
+          <li className="flex items-center gap-3 rounded-lg border border-dashed border-line px-3.5 py-3"
+            title="Posting to these isn't supported yet; download the image and captions instead.">
+            <input type="checkbox" disabled className="size-4 shrink-0" aria-label="Not available" />
+            <span className="flex-1 text-sm text-muted">{unsupported.map((p) => p.label).join(" · ")}</span>
+            <span className="text-xs font-semibold text-muted">Coming soon</span>
+          </li>
+        )}
+      </ul>
+
+      <div className="mt-5">
+        <div className="mb-2 text-sm font-medium text-navy">When</div>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="flex items-center gap-2.5 rounded-lg border-2 border-navy px-3.5 py-2.5 text-sm font-semibold text-navy">
+            <span className="flex size-4 items-center justify-center rounded-full border-2 border-accent">
+              <span className="size-1.5 rounded-full bg-accent" />
+            </span>
+            Post now
+          </div>
+          <div className="flex items-center gap-2.5 rounded-lg border border-line px-3.5 py-2.5 text-sm text-muted"
+            title="Scheduling isn't supported by the backend yet">
+            <span className="size-4 rounded-full border-2 border-line" />
+            Schedule
+            <span className="ml-auto rounded bg-canvas px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide">Soon</span>
+          </div>
+        </div>
+      </div>
+
+      <Button variant="primary" icon={Send} block className="mt-5" loading={busy} disabled={!chosen.length}
+        onClick={publish}>
+        {busy ? "Publishing…" : `Publish to ${chosen.length} account${chosen.length === 1 ? "" : "s"}`}
+      </Button>
+      {!imageUrl && <p className="mt-2 text-center text-xs text-muted">Generate the ad image first.</p>}
+    </section>
+  );
+}
+
+function NotPostingCard({ image, captionsFile, onSave }: {
+  image: AdImage | null;
+  captionsFile: string;
+  onSave: () => void;
+}) {
+  const [notice, setNotice] = useState<Notice>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function downloadPackage() {
+    setBusy(true);
+    setNotice(null);
+    try {
+      const files = [{ name: "captions.txt", data: new TextEncoder().encode(captionsFile) }];
+      if (image) {
+        const res = await fetch(`/api/ad${image.clean_image_url}`);
+        if (!res.ok) throw new Error(`image download failed (${res.status})`);
+        files.unshift({ name: imageName(image), data: new Uint8Array(await res.arrayBuffer()) });
+      }
+      downloadBlob("ad-package.zip", zip(files));
+    } catch (e) {
+      setNotice({ kind: "error", text: `Could not build the package: ${(e as Error).message}` });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <SideCard title="Not posting yet?">
+      <p className="text-sm text-muted">Save it to your drafts or download the image and captions as one package.</p>
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Button onClick={() => {
+          onSave();
+          setNotice({ kind: "success", text: "Saved to Recent drafts." });
+        }}>
+          Save to drafts
+        </Button>
+        <Button loading={busy} onClick={downloadPackage}>Download package</Button>
+      </div>
+      {notice && <div className="mt-3"><NoticeLine notice={notice} /></div>}
+    </SideCard>
   );
 }
 

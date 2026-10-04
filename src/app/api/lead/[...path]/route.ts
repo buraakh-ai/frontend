@@ -5,7 +5,8 @@ import { notFound, proxyJson } from "@/lib/server/proxy";
 
 // Only these Lead source backend endpoints are reachable through the proxy.
 // The page uses only the V2 pipeline; the V1 endpoint is no longer exposed.
-const POST_ENDPOINTS = new Set(["v2/run-sourcing-campaign"]);
+// export-to-lead-hub sends reviewed leads on to the Lead Hub.
+const POST_ENDPOINTS = new Set(["v2/run-sourcing-campaign", "export-to-lead-hub"]);
 
 export async function POST(request: NextRequest, ctx: RouteContext<"/api/lead/[...path]">) {
   const path = (await ctx.params).path.join("/");

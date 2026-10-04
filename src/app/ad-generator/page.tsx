@@ -3,7 +3,7 @@ import { connection } from "next/server";
 import { envFlag } from "@/lib/server/backends";
 import { AdGenerator } from "./ad-generator";
 
-export const metadata: Metadata = { title: "Ad generator · AGFinTax Growth Suite" };
+export const metadata: Metadata = { title: "Ad Studio · AGFinTax Growth Suite" };
 
 export default async function AdGeneratorPage() {
   await connection(); // read env at request time, not build time

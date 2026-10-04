@@ -4,17 +4,12 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
-import { CloudUpload, FileInput, Megaphone, Menu, UserSearch, X, type LucideIcon } from "lucide-react";
+import { House, Menu, X } from "lucide-react";
+import { GROUPS, MODULES, type ModuleGroup } from "@/lib/modules";
 
-type Module = { href: string; label: string; icon: LucideIcon };
+const SECTIONS = Object.keys(GROUPS) as ModuleGroup[];
 
-// Add new modules here; they stack directly under the "Modules" label.
-const MODULES: Module[] = [
-  { href: "/ad-generator", label: "Ad generator", icon: Megaphone },
-  { href: "/lead-source", label: "Lead source", icon: UserSearch },
-  { href: "/zoho-integration", label: "Export leads to Zoho", icon: CloudUpload },
-  { href: "/bitrix-export", label: "Bitrix export", icon: FileInput },
-];
+const itemClass = "-mx-2 flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[14px] font-medium transition-colors";
 
 function Brand() {
   return (
@@ -32,29 +27,54 @@ function Brand() {
 
 function ModuleNav({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
+  const hubActive = pathname === "/";
   return (
-    <nav>
-      <div className="mb-1.5 text-[11px] font-bold uppercase tracking-[0.12em] text-muted">Modules</div>
-      <ul>
-        {MODULES.map(({ href, label, icon: Icon }) => {
-          const active = pathname.startsWith(href);
-          return (
-            <li key={href}>
-              <Link
-                href={href}
-                onClick={onNavigate}
-                aria-current={active ? "page" : undefined}
-                className={`-mx-2 flex items-center gap-2.5 rounded-md px-2 py-1.5 font-display text-[15px] font-semibold transition-colors ${
-                  active ? "bg-tint text-navy" : "text-ink hover:bg-canvas hover:text-navy"
-                }`}
-              >
-                <Icon className={`size-4 ${active ? "text-accent" : "text-muted"}`} aria-hidden />
-                {label}
-              </Link>
-            </li>
-          );
-        })}
-      </ul>
+    <nav className="space-y-5">
+      <Link
+        href="/"
+        onClick={onNavigate}
+        aria-current={hubActive ? "page" : undefined}
+        className={`${itemClass} ${hubActive ? "bg-tint text-navy" : "text-ink hover:bg-canvas hover:text-navy"}`}
+      >
+        <House className={`size-4 ${hubActive ? "text-accent" : "text-muted"}`} aria-hidden />
+        Growth Hub
+      </Link>
+      {SECTIONS.map((group) => (
+        <div key={group}>
+          <div className="mb-1 text-[11px] font-bold uppercase tracking-[0.12em] text-muted">{GROUPS[group].section}</div>
+          <ul>
+            {MODULES.filter((m) => m.group === group).map(({ href, label, icon: Icon }) => {
+              if (!href) {
+                return (
+                  <li key={label}>
+                    <span className={`${itemClass} cursor-default text-muted/70`} title="Coming soon">
+                      <Icon className="size-4" aria-hidden />
+                      {label}
+                      <span className="ml-auto rounded bg-canvas px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide">
+                        Soon
+                      </span>
+                    </span>
+                  </li>
+                );
+              }
+              const active = pathname.startsWith(href);
+              return (
+                <li key={href}>
+                  <Link
+                    href={href}
+                    onClick={onNavigate}
+                    aria-current={active ? "page" : undefined}
+                    className={`${itemClass} ${active ? "bg-tint text-navy" : "text-ink hover:bg-canvas hover:text-navy"}`}
+                  >
+                    <Icon className={`size-4 ${active ? "text-accent" : "text-muted"}`} aria-hidden />
+                    {label}
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ))}
     </nav>
   );
 }
@@ -65,9 +85,9 @@ export function Sidebar() {
   return (
     <>
       {/* Desktop: fixed left rail. */}
-      <aside className="sticky top-0 hidden h-screen w-72 shrink-0 flex-col border-r border-line bg-white px-5 py-6 md:flex">
+      <aside className="sticky top-0 hidden h-screen w-72 shrink-0 flex-col overflow-y-auto border-r border-line bg-white px-5 py-6 md:flex">
         <Brand />
-        <div className="my-8 h-px bg-line" />
+        <div className="my-6 h-px bg-line" />
         <ModuleNav />
       </aside>
 

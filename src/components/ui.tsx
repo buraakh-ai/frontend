@@ -5,12 +5,61 @@ import { AlertTriangle, Check, CheckCircle2, ChevronDown, Info, Loader2, X, XCir
 
 const cx = (...classes: (string | false | null | undefined)[]) => classes.filter(Boolean).join(" ");
 
-export function PageHeader({ title, subtitle }: { title: string; subtitle?: string }) {
+export function PageHeader({ eyebrow, title, subtitle, actions }: {
+  eyebrow?: string;
+  title: string;
+  subtitle?: string;
+  actions?: ReactNode;
+}) {
   return (
-    <div className="mb-6">
-      <h1 className="text-3xl font-bold tracking-tight md:text-4xl">{title}</h1>
-      {subtitle && <p className="mt-1.5 max-w-3xl text-[15px] text-muted">{subtitle}</p>}
+    <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+      <div>
+        {eyebrow && <p className="mb-1.5 text-xs font-bold uppercase tracking-[0.14em] text-accent">{eyebrow}</p>}
+        <h1 className="text-3xl font-bold tracking-tight md:text-4xl">{title}</h1>
+        {subtitle && <p className="mt-1.5 max-w-3xl text-[15px] text-muted">{subtitle}</p>}
+      </div>
+      {actions && <div className="flex shrink-0 gap-3">{actions}</div>}
     </div>
+  );
+}
+
+/** Numbered progress steps; a step is clickable unless `disabled`. */
+export function Stepper<T extends string>({ steps, active, onChange }: {
+  steps: readonly { id: T; label: string; disabled?: boolean }[];
+  active: T;
+  onChange: (id: T) => void;
+}) {
+  return (
+    <ol className="mb-6 flex items-center gap-3 overflow-x-auto rounded-xl border border-line bg-white px-5 py-4 shadow-sm">
+      {steps.map((step, i) => {
+        const current = step.id === active;
+        const done = i < steps.findIndex((s) => s.id === active);
+        return (
+          <li key={step.id} className={cx("flex items-center gap-3", i < steps.length - 1 && "flex-1")}>
+            <button
+              type="button"
+              disabled={step.disabled}
+              aria-current={current ? "step" : undefined}
+              onClick={() => onChange(step.id)}
+              className="flex shrink-0 items-center gap-2.5 text-sm font-semibold disabled:cursor-not-allowed"
+            >
+              <span
+                className={cx(
+                  "flex size-7 items-center justify-center rounded-full text-xs font-bold",
+                  current ? "bg-accent text-white" : done ? "bg-navy text-white" : "border border-line bg-white text-muted",
+                )}
+              >
+                {done ? <Check className="size-3.5" strokeWidth={3} /> : i + 1}
+              </span>
+              <span className={current || done ? "text-navy" : step.disabled ? "text-muted/70" : "text-muted hover:text-navy"}>
+                {step.label}
+              </span>
+            </button>
+            {i < steps.length - 1 && <span className={cx("h-px min-w-6 flex-1", done ? "bg-navy" : "bg-line")} aria-hidden />}
+          </li>
+        );
+      })}
+    </ol>
   );
 }
 
@@ -42,11 +91,10 @@ export function Button({ variant = "secondary", icon: Icon, loading, block, clas
       type="button"
       disabled={disabled || loading}
       className={cx(
-        // Pill, uppercase buttons like agfintax.com's CTAs.
-        "inline-flex items-center justify-center gap-2 rounded-full px-5 py-2.5 text-xs font-semibold uppercase tracking-wider transition-colors",
+        "inline-flex items-center justify-center gap-2 rounded-lg px-5 py-2.5 text-sm font-semibold transition-colors",
         "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ocean disabled:cursor-not-allowed disabled:opacity-50",
         variant === "primary" && "bg-accent text-white shadow-sm hover:bg-accent-dark",
-        variant === "secondary" && "border border-navy/25 bg-white text-navy hover:border-navy hover:bg-canvas",
+        variant === "secondary" && "border border-line bg-white text-navy shadow-sm hover:border-navy/30 hover:bg-canvas",
         variant === "ghost" && "text-navy hover:bg-canvas",
         block && "w-full",
         className,
@@ -77,7 +125,7 @@ export function Field({ label, hint, children, htmlFor }: {
 }
 
 const control =
-  "w-full rounded-md border border-line bg-white px-3 py-2 text-sm text-ink placeholder:text-gray-400 " +
+  "w-full rounded-lg border border-line bg-white px-3 py-2.5 text-sm text-ink placeholder:text-gray-400 " +
   "focus:border-ocean focus:outline-none focus:ring-2 focus:ring-ocean/20 disabled:bg-canvas disabled:text-muted";
 
 type InputProps = { label: string; hint?: string; value: string; onChange: (v: string) => void } & Omit<
@@ -531,7 +579,11 @@ export function JsonView({ value }: { value: unknown }) {
 
 /** Triggers a browser download of in-memory text (captions, CSV). */
 export function downloadText(filename: string, content: string, mime = "text/plain") {
-  const url = URL.createObjectURL(new Blob([content], { type: mime }));
+  downloadBlob(filename, new Blob([content], { type: mime }));
+}
+
+export function downloadBlob(filename: string, blob: Blob) {
+  const url = URL.createObjectURL(blob);
   const a = Object.assign(document.createElement("a"), { href: url, download: filename });
   a.click();
   URL.revokeObjectURL(url);

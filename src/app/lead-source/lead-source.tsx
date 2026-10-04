@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Download, Play } from "lucide-react";
+import { DatabaseZap, Download, Play } from "lucide-react";
 import { callApi } from "@/lib/backend-result";
 import type { LeadConfig } from "@/lib/server/lead-config";
 import { createStore } from "@/lib/store";
 import {
-  Alert, Button, Card, DataTable, Expander, JsonView, Metric, MultiSelect, PageHeader, Select, Slider, Tabs,
+  Alert, Button, Card, Checkbox, DataTable, Expander, JsonView, Metric, MultiSelect, PageHeader, Select, Slider, Tabs,
   TextInput, downloadText,
 } from "@/components/ui";
 
@@ -33,6 +33,7 @@ type RunSummary = Row & {
   };
 };
 type TabId = "targeting" | "sources" | "leads" | "handoff";
+type Notice = { kind: "success" | "error" | "warning"; text: string };
 
 // Fine-tuning sliders for the discovery pipeline, with a one-line explanation each.
 const DISCOVERY_CONTROLS = [
@@ -50,7 +51,7 @@ const PIPELINE_STEPS = [
   ["Discover", "Searches every source (Google Places, public web, Yellow Pages, chambers of commerce and more) for businesses matching your industries and locations."],
   ["Enrich", "Visits each business's public pages to collect phone, email, website and decision-maker details."],
   ["Qualify", "Verifies and scores each business, drops duplicates and poor matches, and keeps the best leads."],
-  ["Save", "Stores the run, sources and leads in AWS PostgreSQL, ready for export to Zoho."],
+  ["Review & export", "You review the leads, then click “Export to Lead Hub” to send the ones you approve to the Lead Hub, ready for Zoho."],
 ] as const;
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -63,6 +64,8 @@ const newId = (): string =>
     : "10000000-1000-4000-8000-100000000000".replace(/[018]/g, (c) =>
         (Number(c) ^ (crypto.getRandomValues(new Uint8Array(1))[0] & (15 >> (Number(c) / 4)))).toString(16),
       );
+// A lead nobody can contact isn't selected for export by default (it can still be ticked).
+const reachable = (lead: Row) => Boolean(lead.business_email || lead.personal_email || lead.phone);
 // Mirrors Python truthiness: an empty dict/list/string counts as "nothing".
 const hasContent = (v: unknown) =>
   Array.isArray(v) ? v.length > 0 : v && typeof v === "object" ? Object.keys(v).length > 0 : !!v;
@@ -93,6 +96,11 @@ const store = createStore({
   leadSources: [] as Row[],
   leads: [] as Row[],
   runSummary: null as RunSummary | null,
+  // The campaign the shown results came from, as the backend echoed it back.
+  campaign: null as Row | null,
+  // Which leads to export to the Lead Hub, and which already were (by row).
+  selected: [] as boolean[],
+  exported: [] as boolean[],
 });
 
 /** e.g. "Restaurants & Retail – Irvine, California" */
@@ -133,7 +141,9 @@ function useElapsed(running: boolean) {
 export function LeadSource({ config, warning }: { config: LeadConfig; warning: string | null }) {
   const [s, set] = store.useStore();
   const [running, setRunning] = useState(false);
-  const [runNotice, setRunNotice] = useState<{ kind: "success" | "error"; text: string } | null>(null);
+  const [runNotice, setRunNotice] = useState<Notice | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportNotice, setExportNotice] = useState<Notice | null>(null);
   const elapsed = useElapsed(running);
 
   useEffect(() => {
@@ -152,6 +162,7 @@ export function LeadSource({ config, warning }: { config: LeadConfig; warning: s
 
   async function runCampaign() {
     setRunNotice(null);
+    setExportNotice(null);
     const name = campaignName(form.industries, areas, region);
     const payload = {
       campaign: {
@@ -172,28 +183,64 @@ export function LeadSource({ config, warning }: { config: LeadConfig; warning: s
       },
       source_count: form.sourceCount,
       lead_count: form.leadCount,
-      // Every configured provider is always used, and results are always saved.
+      // Every configured provider is always used. Leads are not saved automatically:
+      // a person reviews them and sends them with "Export to Lead Hub".
       discovery: { providers: Object.values(runCfg.provider_labels), ...form.discovery },
-      persist_to_database: runCfg.persist_to_database,
+      persist_to_database: false,
     };
     setRunning(true);
     try {
-      const result = await callApi<{ lead_sources: Row[]; leads: Row[]; run_summary: RunSummary }>(
+      const result = await callApi<{ campaign: Row; lead_sources: Row[]; leads: Row[]; run_summary: RunSummary }>(
         "lead", "v2/run-sourcing-campaign", payload,
       );
       // The backend isn't ours to change, so tolerate missing/renamed fields
       // rather than crashing the page.
+      const leads = Array.isArray(result?.leads) ? result.leads : [];
       set({
         resultName: name,
         leadSources: Array.isArray(result?.lead_sources) ? result.lead_sources : [],
-        leads: Array.isArray(result?.leads) ? result.leads : [],
+        leads,
         runSummary: result?.run_summary && typeof result.run_summary === "object" ? result.run_summary : null,
+        campaign: result?.campaign && typeof result.campaign === "object" ? result.campaign : payload.campaign,
+        selected: leads.map(reachable),
+        exported: leads.map(() => false),
       });
       setRunNotice({ kind: "success", text: "Sourcing run completed." });
     } catch (e) {
       setRunNotice({ kind: "error", text: `Sourcing run failed: ${(e as Error).message}` });
     } finally {
       setRunning(false);
+    }
+  }
+
+  const selectedCount = s.selected.filter(Boolean).length;
+  const exportedCount = s.exported.filter(Boolean).length;
+
+  // Sends the given leads (by row) to the Lead Hub, after the user confirms.
+  async function exportToHub(rows: number[]) {
+    if (!rows.length) {
+      setExportNotice({ kind: "warning", text: "Select at least one lead to export." });
+      return;
+    }
+    if (!s.runSummary || !s.campaign) return;
+    if (!window.confirm(`Export ${rows.length} lead(s) to the Lead Hub?`)) return;
+    setExportNotice(null);
+    setExporting(true);
+    try {
+      const { message } = await callApi<{ sent: number; message: string }>("lead", "export-to-lead-hub", {
+        campaign: s.campaign,
+        run_summary: s.runSummary,
+        leads: rows.map((i) => s.leads[i]),
+      });
+      set((st) => ({
+        exported: st.exported.map((v, i) => v || rows.includes(i)),
+        selected: st.selected.map((v, i) => v && !rows.includes(i)),
+      }));
+      setExportNotice({ kind: "success", text: message || `Exported ${rows.length} lead(s) to the Lead Hub.` });
+    } catch (e) {
+      setExportNotice({ kind: "error", text: `Export to the Lead Hub failed: ${(e as Error).message}` });
+    } finally {
+      setExporting(false);
     }
   }
 
@@ -268,7 +315,7 @@ export function LeadSource({ config, warning }: { config: LeadConfig; warning: s
                 hint="Businesses to find and enrich. More gives better choice but takes longer." />
               <Slider label="Qualified leads to return" min={runCfg.lead_count.min} max={runCfg.lead_count.max}
                 value={form.leadCount} onChange={(v) => setForm({ leadCount: v })}
-                hint="The best-scoring businesses returned and saved as leads." />
+                hint="The best-scoring businesses returned as leads." />
             </div>
             <Expander title="Advanced discovery settings">
               <div className="grid gap-x-8 gap-y-5 md:grid-cols-2">
@@ -298,7 +345,7 @@ export function LeadSource({ config, warning }: { config: LeadConfig; warning: s
               { id: "targeting", label: "1 · Targeting" },
               { id: "sources", label: "2 · Source discovery" },
               { id: "leads", label: "3 · Qualified leads" },
-              { id: "handoff", label: "4 · Database handoff" },
+              { id: "handoff", label: "4 · Lead Hub handoff" },
             ]}
             active={s.tab}
             onChange={(tab) => set({ tab })}
@@ -340,17 +387,40 @@ export function LeadSource({ config, warning }: { config: LeadConfig; warning: s
                   <Metric label="Decision makers" value={s.leads.filter((x) => !!x.decision_maker_name).length} />
                   <Metric label="Verified" value={s.leads.filter((x) => x.verification_status === "verified").length} />
                 </div>
-                <DataTable
-                  rows={s.leads}
-                  columns={["business_name", "category", "city", "state", "phone", "business_email",
-                    "decision_maker_name", "decision_maker_role", "verification_status", "lead_score"]}
+                <Checkbox
+                  label={`Select all ${s.leads.length} leads`}
+                  checked={selectedCount === s.leads.length}
+                  onChange={(v) => set({ selected: s.leads.map(() => v) })}
                 />
-                <Button variant="primary" icon={Download} onClick={() => downloadText(
-                  `${s.resultName.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "")}_leads.csv`,
-                  toCsv(s.leads), "text/csv",
-                )}>
-                  Download leads CSV
-                </Button>
+                <DataTable
+                  rows={s.leads.map((lead, i) => ({ ...lead, lead_hub: s.exported[i] ? "Exported" : "" }))}
+                  columns={["business_name", "category", "city", "state", "phone", "business_email",
+                    "decision_maker_name", "decision_maker_role", "verification_status", "lead_score", "lead_hub"]}
+                  selected={s.selected}
+                  onSelectedChange={(selected) => set({ selected })}
+                />
+                {exportNotice && <Alert kind={exportNotice.kind}>{exportNotice.text}</Alert>}
+                <div className="flex flex-col gap-3 border-t border-line pt-4 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-sm text-muted">
+                    Leads are not saved until you export them. Review them, then export the ones you approve to the Lead Hub.
+                  </p>
+                  <div className="flex shrink-0 flex-wrap gap-3">
+                    <Button icon={Download} onClick={() => downloadText(
+                      `${s.resultName.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "")}_leads.csv`,
+                      toCsv(s.leads), "text/csv",
+                    )}>
+                      Download CSV
+                    </Button>
+                    <Button icon={DatabaseZap} disabled={exporting || running}
+                      onClick={() => exportToHub(s.leads.map((_, i) => i))}>
+                      Export all {s.leads.length}
+                    </Button>
+                    <Button variant="primary" icon={DatabaseZap} loading={exporting} disabled={running || !selectedCount}
+                      onClick={() => exportToHub(s.selected.flatMap((v, i) => (v ? [i] : [])))}>
+                      Export to Lead Hub ({selectedCount})
+                    </Button>
+                  </div>
+                </div>
                 <Expander title="Lead evidence and marketing context">
                   <div className="space-y-4 text-sm">
                     {s.leads.map((lead, i) => (
@@ -414,13 +484,17 @@ export function LeadSource({ config, warning }: { config: LeadConfig; warning: s
                     </div>
                   </Card>
                 )}
-                <Alert kind={summary.database_saved ? "success" : "warning"}>{summary.database_message || (summary.database_saved ? "Saved." : "Not saved to the database.")}</Alert>
+                <Alert kind={exportedCount ? "success" : "warning"}>
+                  {exportedCount
+                    ? `${exportedCount} of ${s.leads.length} leads exported to the Lead Hub.`
+                    : "No leads exported to the Lead Hub yet. Review them under “3 · Qualified leads” and click “Export to Lead Hub”."}
+                </Alert>
                 <Expander title="Full run summary">
                   <JsonView value={summary} />
                 </Expander>
               </div>
             ) : (
-              <Alert>The run summary and AWS PostgreSQL handoff status will appear here.</Alert>
+              <Alert>The run summary and Lead Hub handoff status will appear here. Leads go to the Lead Hub only when you export them.</Alert>
             )
           )}
         </div>
