@@ -36,7 +36,8 @@ Production build: `npm run build && npm start`. Lint: `npm run lint`.
 - `src/app/api/{ad,lead,zoho,bitrix,hub}/[...path]` — server-side
   proxies to each module's own backend. Only allow-listed endpoints pass
   through. Long calls stream keep-alive whitespace so a load balancer's idle
-  timeout doesn't drop them (Lead source runs can take up to 20 minutes).
+  timeout doesn't drop them (synchronous Lead source runs can take up to 20
+  minutes; the page itself now starts a background job and polls it).
 - `src/lib/server/lead-config.ts` + `src/config/lead-source.json` — Lead
   source UI config (industries, states, roles, provider labels, slider
   limits). Add options in the JSON, not in code. `STREAMLIT_CONFIG_S3_URI` /
@@ -114,6 +115,13 @@ The Lead Hub (AWS RDS) is served by the `leadhubexport` backend
 source lands its leads there, but only the leads a person approves, and always
 through the source's own backend (which is configured with `LEAD_HUB_API_URL`):
 
+- Lead Finder: a run starts with `POST /v2/sourcing-jobs` (same body as
+  `/v2/run-sourcing-campaign`, → `{job_id}`), and the page polls
+  `GET /v2/sourcing-jobs/{job_id}` every 2 s for the stage, live counts, leads
+  so far and usage (tokens, search calls, estimated cost) until `result` arrives.
+  A run in progress keeps being watched while the person is on other pages.
+  The pre-run time/cost estimate (`src/app/lead-source/estimate.ts`) mirrors the
+  backend's list prices by hand and is calibrated by this browser's past runs.
 - Lead Finder: runs are not saved automatically (`persist_to_database: false`);
   "Export to Lead Hub" sends the selected leads to the Lead source backend's
   `POST /export-to-lead-hub` (`{campaign, run_summary, leads}` from the run's

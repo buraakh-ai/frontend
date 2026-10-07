@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Volume1 } from "lucide-react";
 import { GROUPS, MODULES, type Module, type ModuleGroup } from "@/lib/modules";
+import { currentUserName } from "@/lib/server/current-user";
 import { Today } from "./today";
 
 export const metadata: Metadata = { title: "Growth Hub · AGFinTax Growth Suite" };
@@ -13,13 +14,16 @@ const TONES: Record<ModuleGroup, { tile: string; badge: string }> = {
   activate: { tile: "bg-success/10 text-success", badge: "bg-success/10 text-success" },
 };
 
-export default function GrowthHub() {
+export default async function GrowthHub() {
+  const userName = await currentUserName();
   return (
     <div className="space-y-8">
       <header>
         <div>
           <Today className="text-sm font-semibold text-accent" />
-          <h1 className="mt-2 text-3xl font-bold tracking-tight md:text-[40px] md:leading-tight">Welcome back</h1>
+          <h1 className="mt-2 text-3xl font-bold tracking-tight md:text-[40px] md:leading-tight">
+            {userName ? `Welcome back, ${userName}` : "Welcome back"}
+          </h1>
           <p className="mt-1.5 text-[15px] text-muted">
             Create campaigns, capture leads from every source, and activate them in Zoho.
           </p>
@@ -42,7 +46,7 @@ export default function GrowthHub() {
       <section>
         <h2 className="mb-4 text-xl font-bold">Modules</h2>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {MODULES.filter((m) => !m.navOnly).map((m) => (
+          {MODULES.map((m) => (
             <ModuleCard key={m.label} module={m} />
           ))}
         </div>
@@ -68,7 +72,11 @@ function ModuleCard({ module: { label, description, icon: Icon, group, href } }:
           </span>
         </span>
         <span className="mt-1 block text-[13px] leading-relaxed text-muted">{description}</span>
-        {!href && <span className="mt-2 block text-[11px] font-semibold uppercase tracking-wide text-muted/70">Coming soon</span>}
+        {!href && (
+          <span className="mt-2 block text-right text-[11px] font-semibold uppercase tracking-wide text-muted/70">
+            Coming soon
+          </span>
+        )}
       </span>
     </>
   );

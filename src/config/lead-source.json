@@ -71,6 +71,25 @@
   },
   "targeting": {
     "industry_suggestions": ["Accounting and bookkeeping", "Auto repair and dealerships", "Beauty salons and spas", "Cafés and bakeries", "Catering and food trucks", "Child care and education", "Chiropractors", "Cleaning and janitorial", "Construction and contractors", "Dentists", "E-commerce", "Electricians", "Engineering firms", "Fitness and gyms", "Gas stations and convenience stores", "Home health care", "Hotels and motels", "HVAC services", "Insurance agencies", "IT services and software", "Landscaping", "Law firms", "Logistics and trucking", "Manufacturing", "Marketing agencies", "Medical clinics", "Mortgage and lending", "Pharmacies", "Physical therapy", "Plumbers", "Property management", "Real estate", "Restaurants", "Retail", "Roofing", "Staffing agencies", "Veterinarians", "Wholesale and distribution"],
+    "specialty_suggestions": {
+      "Restaurants": ["Indian restaurants", "Pakistani restaurants", "Bangladeshi restaurants", "Nepalese restaurants", "Halal restaurants", "Middle Eastern restaurants", "Mediterranean restaurants", "Persian restaurants", "Chinese restaurants", "Japanese restaurants", "Sushi restaurants", "Korean restaurants", "Thai restaurants", "Vietnamese restaurants", "Filipino restaurants", "Mexican restaurants", "Latin American restaurants", "Italian restaurants", "Pizza restaurants", "Greek restaurants", "American restaurants", "Barbecue restaurants", "Seafood restaurants", "Steakhouses", "Vegetarian restaurants", "Fast food restaurants", "Sports bars"],
+      "Cafés and bakeries": ["Coffee shops", "Bakeries", "Donut shops", "Dessert shops", "Ice cream shops", "Bubble tea shops", "Juice bars", "Indian sweet shops"],
+      "Catering and food trucks": ["Caterers", "Indian caterers", "Food trucks", "Event caterers"],
+      "Retail": ["Indian grocery stores", "Halal grocery stores", "Asian grocery stores", "Grocery stores", "Clothing stores", "Jewelry stores", "Furniture stores", "Electronics stores", "Liquor stores", "Smoke shops", "Cell phone stores", "Gift shops", "Pet stores"],
+      "Beauty salons and spas": ["Hair salons", "Nail salons", "Barbershops", "Day spas", "Med spas", "Eyebrow threading", "Lash studios", "Tanning salons"],
+      "Medical clinics": ["Urgent care clinics", "Family medicine clinics", "Pediatric clinics", "Dermatology clinics", "Women’s health clinics", "Imaging centers", "Dialysis centers"],
+      "Dentists": ["General dentists", "Cosmetic dentists", "Orthodontists", "Pediatric dentists", "Oral surgeons", "Endodontists"],
+      "Fitness and gyms": ["Gyms", "Yoga studios", "Pilates studios", "Martial arts schools", "CrossFit gyms", "Dance studios"],
+      "Auto repair and dealerships": ["Auto repair shops", "Body shops", "Tire shops", "Used car dealers", "Car washes", "Oil change shops"],
+      "Hotels and motels": ["Hotels", "Motels", "Bed and breakfasts", "Extended stay hotels"],
+      "Gas stations and convenience stores": ["Gas stations", "Convenience stores", "Truck stops"],
+      "Real estate": ["Real estate agencies", "Commercial real estate brokers", "Property developers"],
+      "Construction and contractors": ["General contractors", "Remodeling contractors", "Concrete contractors", "Painting contractors", "Flooring contractors"],
+      "Child care and education": ["Daycare centers", "Preschools", "Tutoring centers", "Private schools"],
+      "Law firms": ["Immigration lawyers", "Personal injury lawyers", "Family lawyers", "Business lawyers", "Real estate lawyers"],
+      "Pharmacies": ["Independent pharmacies", "Compounding pharmacies"],
+      "Logistics and trucking": ["Trucking companies", "Freight brokers", "Courier services", "Moving companies"]
+    },
     "default_industries": ["Restaurants", "Retail"],
     "role_suggestions": ["Owner", "Co-Owner", "Founder", "CEO", "President", "Managing Partner", "General Manager", "Operations Manager", "Office Manager", "Practice Manager", "Finance Manager", "CFO", "Controller", "Bookkeeper"],
     "default_roles": ["Owner", "Founder", "General Manager", "Finance Manager"]
@@ -79,11 +98,10 @@
     "source_count": {"min": 1, "max": 500, "default": 100},
     "lead_count": {"min": 1, "max": 100, "default": 10},
     "provider_labels": {"Google Places": "google_places", "Public web": "web_search", "Yellow Pages": "yellow_pages", "Chambers": "chambers", "Sulekha": "sulekha"},
-    "oversampling_factor": {"min": 1, "max": 10, "default": 3},
-    "max_queries": {"min": 1, "max": 200, "default": 40},
     "results_per_query": {"min": 1, "max": 20, "default": 10},
     "max_pages_per_query": {"min": 1, "max": 3, "default": 2},
     "enrichment_batch_size": {"min": 1, "max": 25, "default": 10},
+    "enrichment_concurrency": {"min": 1, "max": 8, "default": 4},
     "persist_to_database": false
   }
 }

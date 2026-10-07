@@ -2,7 +2,6 @@ import {
   CloudUpload,
   Database,
   Download,
-  LibraryBig,
   ScanSearch,
   Video,
   Volume1,
@@ -18,8 +17,6 @@ export type Module = {
   group: ModuleGroup;
   /** Omitted while the module is not built yet; it then shows as "Soon". */
   href?: string;
-  /** Hidden from the homepage grid (still listed in the sidebar). */
-  navOnly?: boolean;
 };
 
 export const GROUPS: Record<ModuleGroup, { section: string; badge: string }> = {
@@ -37,13 +34,6 @@ export const MODULES: Module[] = [
     icon: Volume1,
     group: "create",
     href: "/ad-generator",
-  },
-  {
-    label: "Campaign Library",
-    description: "Every generated campaign, saved and reusable.",
-    icon: LibraryBig,
-    group: "create",
-    navOnly: true,
   },
   {
     label: "Lead Finder",
@@ -77,6 +67,5 @@ export const MODULES: Module[] = [
     description: "Export leads to Zoho CRM and a Zoho Campaigns list.",
     icon: CloudUpload,
     group: "activate",
-    href: "/zoho-integration",
   },
 ];

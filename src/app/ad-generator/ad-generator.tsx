@@ -320,7 +320,6 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
           eyebrow="Create"
           title="Ad Studio"
           subtitle="Research a company, tie the campaign to a real event, and generate ad copy and images."
-          actions={<Button disabled title="Coming soon">Campaign Library</Button>}
         />
       )}
       <Stepper
