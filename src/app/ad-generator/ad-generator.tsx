@@ -1145,7 +1145,7 @@ function PaidPromotionCard({ imageUrl, campaignName, facebookMessage, link }: {
             <Button icon={FileText} loading={busy} disabled={!fb.countries.length} onClick={() => {
               const start = new Date();
               const end = new Date(start.getTime() + fb.days * 86_400_000);
-              // Same format the Streamlit app sent: %Y-%m-%dT%H:%M:%S%z in UTC.
+              // The format the backend expects: %Y-%m-%dT%H:%M:%S%z in UTC.
               const fmt = (d: Date) => `${d.toISOString().slice(0, 19)}+0000`;
               createDraft("create-facebook-ad-campaign", {
                 name: campaignName,

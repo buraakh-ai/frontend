@@ -14,8 +14,6 @@ export type Usage = {
   directory_pages: number; // Yellow Pages / OpenStreetMap lookups (free)
   tavily_searches: number;
   brave_searches: number;
-  places_text_searches: number;
-  places_details: number;
   llm_cost_usd: number;
   api_cost_usd: number;
   total_cost_usd: number;
@@ -49,7 +47,7 @@ export function formatCount(v: number): string {
 }
 
 export const searchCalls = (u: Usage) =>
-  num(u.free_searches) + num(u.directory_pages) + paidSearches(u) + num(u.places_text_searches) + num(u.places_details);
+  num(u.free_searches) + num(u.directory_pages) + paidSearches(u);
 
 /** Searches through APIs with a free monthly allowance (Tavily, Brave). */
 export const paidSearches = (u: Usage) => num(u.tavily_searches) + num(u.brave_searches);

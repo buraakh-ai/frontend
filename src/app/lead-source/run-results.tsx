@@ -273,7 +273,6 @@ export function RunDetails({ summary, sources, usage, leads }: { summary: Row | 
                   ["Free web searches", num(usage.free_searches)],
                   ["Directory lookups (free)", num(usage.directory_pages)],
                   ["Free-tier API searches (Tavily, Brave)", paidSearches(usage)],
-                  ["Google Places lookups", num(usage.places_text_searches) + num(usage.places_details)],
                   ["Search cost", formatUsd(num(usage.api_cost_usd))],
                   ["Total", formatUsd(num(usage.total_cost_usd))],
                 ] as const).map(([k, v]) => (

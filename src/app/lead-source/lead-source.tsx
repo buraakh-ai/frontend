@@ -293,11 +293,9 @@ export function LeadSource({ config, warning }: { config: LeadConfig; warning: s
   // Discovery searches: every provider for every city × kind of business.
   const searchCells = Math.max(areas.length, 1) * Math.max(searchedFor.length, 1);
   const plannedQueries = clamp(searchCells * providers.length, 1, 200);
-  const placesQueries = providers.includes("google_places") ? Math.min(searchCells, plannedQueries) : 0;
   const shape: RunShape = {
     sources: sourceCount,
-    webQueries: (plannedQueries - placesQueries) * form.pagesPerQuery,
-    placesQueries: placesQueries * form.pagesPerQuery,
+    webQueries: plannedQueries * form.pagesPerQuery,
     resultsPerQuery: form.resultsPerQuery,
     batchSize: form.batchSize,
     concurrency: form.concurrency,

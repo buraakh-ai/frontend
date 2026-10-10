@@ -365,7 +365,7 @@ export function MultiSelect({ label, options, selected, onChange, placeholder = 
   );
 }
 
-/** Toggleable chips — used where Streamlit had a multiselect. */
+/** Toggleable chips: a compact multiselect. */
 export function ChipSelect({ label, options, selected, onChange, format }: {
   label: string;
   options: readonly string[];

@@ -133,7 +133,7 @@ async function loadLeadConfig(): Promise<{ config: LeadConfig; warning: string |
   }
 }
 
-// Loaded once per server process, like the Streamlit app's st.cache_resource.
+// Loaded once per server process.
 let cached: ReturnType<typeof loadLeadConfig> | undefined;
 export function getLeadConfig() {
   cached ??= loadLeadConfig();

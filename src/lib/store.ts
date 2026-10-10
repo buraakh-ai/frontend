@@ -3,8 +3,8 @@
 import { useSyncExternalStore } from "react";
 
 /** A tiny module-level store. It lives as long as the browser tab, so a
- * module's campaign/results survive switching to another module and back
- * (the role Streamlit's session_state played). Each module creates its own
+ * module's campaign/results survive switching to another module and back.
+ * Each module creates its own
  * store, keeping their state disjoint. */
 export function createStore<S extends object>(initial: S) {
   let state = initial;

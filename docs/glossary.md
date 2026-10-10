@@ -107,7 +107,6 @@ All of these are published, public sources. No private databases or bought lists
 | Free web searches | Searches through free search engines. Cost: $0. |
 | Directory lookups (free) | Yellow Pages and OpenStreetMap pages read. Cost: $0. |
 | Free-tier API searches (Tavily, Brave) | Searches through optional search services that have a free monthly allowance. Normally $0. |
-| Google Places lookups | Optional paid source. Not used by default. |
 | Search cost | Total cost of searches. $0 with the default (free) sources. |
 | Time per lead | Run time divided by the number of leads. |
 

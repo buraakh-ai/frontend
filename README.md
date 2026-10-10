@@ -66,9 +66,9 @@ ECS Fargate behind an ALB: build and push the image to ECR, then
 `.env.example` on the task definition (at least `BACKEND_BASE_URL`,
 `LEAD_SOURCE_BACKEND_URL` and `ZOHO_INTEGRATION_BACKEND_URL`).
 
-Changes from the Streamlit deployment:
-- Container port is **3000** (was 8501); update the target group.
-- ALB health check path is **`/`** (was `/_stcore/health`).
+Target group settings:
+- Container port is **3000**.
+- ALB health check path is **`/`**.
 - WebSocket support is no longer needed, but the ALB idle timeout must stay
   above 15 s (the keep-alive interval); the default 60 s is fine.
 

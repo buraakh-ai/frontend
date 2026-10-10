@@ -6,7 +6,6 @@
 export type RunShape = {
   sources: number; // businesses to check
   webQueries: number; // free discovery searches (Yellow Pages, OpenStreetMap, web search engines)
-  placesQueries: number; // paid discovery searches through Google Places
   resultsPerQuery: number;
   batchSize: number;
   concurrency: number;
@@ -18,9 +17,7 @@ export type Estimate = { seconds: number; cost: number; fromHistory: number };
 
 // List prices; keep in sync by hand with the backend's settings (usage.py).
 // Web searches and directory pages are free (SearXNG, DDGS, Yellow Pages,
-// OpenStreetMap); only Google Places and the AI model cost money.
-const PLACES_TEXT_SEARCH = 0.032;
-const PLACES_DETAILS = 0.02;
+// OpenStreetMap); only the AI model costs money.
 // Measured on test runs (gpt-4o-mini, evidence-first enrichment):
 const AI_PER_BUSINESS = 0.0002; // ~900 tokens each
 const DISCOVERY_SECONDS = 12; // per chunk of parallel discovery searches
@@ -28,13 +25,12 @@ const DISCOVERY_CHUNK = 6;
 const BATCH_SECONDS = 60; // scraping, free searches + one AI call, for a batch of up to ~10
 
 export function estimateShape(shape: RunShape): { seconds: number; cost: number } {
-  const discoveryChunks = Math.max(1, Math.ceil((shape.webQueries + shape.placesQueries) / DISCOVERY_CHUNK));
+  const discoveryChunks = Math.max(1, Math.ceil(shape.webQueries / DISCOVERY_CHUNK));
   const batches = Math.max(1, Math.ceil(shape.sources / Math.max(shape.batchSize, 1)));
   const waves = Math.ceil(batches / Math.max(shape.concurrency, 1));
   const seconds = discoveryChunks * DISCOVERY_SECONDS + waves * BATCH_SECONDS;
 
-  const cost =
-    shape.placesQueries * (PLACES_TEXT_SEARCH + shape.resultsPerQuery * PLACES_DETAILS) + shape.sources * AI_PER_BUSINESS;
+  const cost = shape.sources * AI_PER_BUSINESS;
   return { seconds, cost };
 }
 
