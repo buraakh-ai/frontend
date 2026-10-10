@@ -1,55 +1,70 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CloudUpload, RefreshCw, Search } from "lucide-react";
+import { ListPlus, RefreshCw, Search } from "lucide-react";
 import { callApi } from "@/lib/backend-result";
 import { createStore } from "@/lib/store";
 import { Alert, Button, Card, Checkbox, DataTable, Metric, PageHeader, Select, TextInput } from "@/components/ui";
 
-type Lead = Record<string, unknown>;
-type CampaignList = { list_id: string; list_name: string | null };
-type Stage = { status: string; error?: string | null; message?: string };
-type ExportResult = {
-  email: string | null;
-  status: string;
-  error: string | null;
-  lead: Stage;
-  campaigns: Stage;
+/** GET /zoho/crm/v8/Leads record: a CRM Lead or Contact (same keys for both, null when empty). */
+type CrmRecord = {
+  id: string;
+  Module: "Leads" | "Contacts";
+  Full_Name: string | null;
+  First_Name: string | null;
+  Last_Name: string | null;
+  Email: string | null;
+  Phone: string | null;
+  Mobile: string | null;
+  Company: string | null;
+  City: string | null;
+  Lead_Source: string | null;
+  Lead_Status: string | null;
+  Created_Time: string | null;
 };
-type ExportResponse = { results: ExportResult[]; total: number; succeeded: number; failed: number };
+type LeadsResponse = { data: CrmRecord[]; info: { count: number; more_records: boolean } };
+type CampaignList = { list_id: string; list_name: string | null };
+/** POST /zoho/lists/members response. */
+type MembersResponse = {
+  list_key: string | null;
+  list_name: string | null;
+  results: { email: string; status: string; error?: string | null }[];
+  total: number;
+  succeeded: number;
+  failed: number;
+};
 type Notice = { kind: "success" | "error" | "warning"; text: string };
 
 const NEW_LIST = "__new__";
-// The backend accepts at most this many records per /zoho/export request.
-const EXPORT_BATCH_SIZE = 200;
+// The backend accepts at most this many emails per /zoho/lists/members request.
+const MEMBERS_BATCH_SIZE = 200;
 
 const isoDay = (d: Date) => d.toISOString().slice(0, 10);
 const daysAgo = (n: number) => isoDay(new Date(Date.now() - n * 86_400_000));
+const emailOf = (r: CrmRecord) => r.Email?.trim() ?? "";
 
-// Kept for the life of the tab, so loaded leads survive switching modules.
+// Kept for the life of the tab, so loaded records survive switching modules.
 const store = createStore({
   from: daysAgo(7),
   to: isoDay(new Date()),
-  // The range the shown leads were fetched for (the inputs may since have changed).
-  loaded: null as { from: string; to: string; leads: Lead[] } | null,
-  // Which loaded leads to export (by row); all are checked when fetched.
+  // The range the shown records were fetched for (the inputs may since have changed).
+  loaded: null as { from: string; to: string; records: CrmRecord[] } | null,
+  // Which loaded records to add (by row); every one with an email starts ticked.
   selected: [] as boolean[],
   lists: null as CampaignList[] | null,
   listChoice: "",
   newListName: "",
-  exportResult: null as ExportResponse | null,
+  result: null as MembersResponse | null,
 });
-
-const stageText = (s: Stage) => (s.error ? `${s.status}: ${s.error}` : s.status);
 
 export function ZohoIntegration() {
   const [s, set] = store.useStore();
   const [loading, setLoading] = useState(false);
   const [loadingLists, setLoadingLists] = useState(false);
-  const [exporting, setExporting] = useState(false);
+  const [adding, setAdding] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
-  // Why "Export to Zoho" can't run yet; shown beside the button.
-  const [exportHint, setExportHint] = useState<string | null>(null);
+  // Why "Add to list" can't run yet; shown beside the button.
+  const [hint, setHint] = useState<string | null>(null);
   const rangeInvalid = !s.from || !s.to || s.to < s.from;
 
   const fetchLists = () =>
@@ -70,15 +85,16 @@ export function ZohoIntegration() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function getLeads() {
+  async function getRecords() {
     setNotice(null);
+    setHint(null);
     setLoading(true);
     try {
-      const query = new URLSearchParams({ start_date: s.from, end_date: s.to });
-      const leads = await callApi<Lead[]>("zoho", `records?${query}`);
-      set({ loaded: { from: s.from, to: s.to, leads }, selected: leads.map(() => true), exportResult: null });
+      const query = new URLSearchParams({ created_from: s.from, created_to: s.to });
+      const { data } = await callApi<LeadsResponse>("zoho", `zoho/crm/v8/Leads?${query}`);
+      set({ loaded: { from: s.from, to: s.to, records: data }, selected: data.map((r) => Boolean(emailOf(r))), result: null });
     } catch (e) {
-      setNotice({ kind: "error", text: `Could not get leads: ${(e as Error).message}` });
+      setNotice({ kind: "error", text: `Could not get leads from Zoho CRM: ${(e as Error).message}` });
     } finally {
       setLoading(false);
     }
@@ -91,49 +107,54 @@ export function ZohoIntegration() {
   const listLabel = creatingList
     ? `new list "${s.newListName.trim()}"`
     : `list "${s.lists?.find((l) => l.list_id === s.listChoice)?.list_name ?? s.listChoice}"`;
-  const selectedLeads = s.loaded?.leads.filter((_, i) => s.selected[i]) ?? [];
+  const records = s.loaded?.records ?? [];
+  // A Campaigns list member is an email address, so records without one are skipped.
+  const selectedEmails = [...new Set(records.filter((r, i) => s.selected[i] && emailOf(r)).map(emailOf))];
+  const withoutEmail = records.filter((r) => !emailOf(r)).length;
 
-  async function exportToZoho() {
+  async function addToList() {
     // Say what's missing rather than leaving the button disabled with no reason.
-    const missing = !selectedLeads.length
-      ? "Select at least one email to export."
+    const missing = !selectedEmails.length
+      ? "Select at least one lead with an email."
       : !s.listChoice
-        ? "Choose a Zoho Campaigns list (or \"+ Create a new list\") before exporting."
+        ? "Choose a Zoho Campaigns list (or \"+ Create a new list\") first."
         : !listTarget
-          ? "Enter a name for the new list before exporting."
+          ? "Enter a name for the new list first."
           : null;
-    setExportHint(missing);
+    setHint(missing);
     if (missing || !listTarget) return;
-    const leads = selectedLeads;
-    if (!window.confirm(`Export ${leads.length} lead(s) to Zoho CRM and the Campaigns ${listLabel}?`)) return;
+    if (!window.confirm(`Add ${selectedEmails.length} email(s) to the Zoho Campaigns ${listLabel}?`)) return;
     setNotice(null);
-    setExporting(true);
-    // Send batches one after another; a new list is created by the first batch
+    setAdding(true);
+    // Batches go one after another; a new list is created by the first batch
     // and later batches find it again by name.
-    const result: ExportResponse = { results: [], total: 0, succeeded: 0, failed: 0 };
+    const result: MembersResponse = { list_key: null, list_name: null, results: [], total: 0, succeeded: 0, failed: 0 };
     try {
-      for (let start = 0; start < leads.length; start += EXPORT_BATCH_SIZE) {
-        const batch = await callApi<ExportResponse>("zoho", "zoho/export", {
-          records: leads.slice(start, start + EXPORT_BATCH_SIZE),
+      for (let start = 0; start < selectedEmails.length; start += MEMBERS_BATCH_SIZE) {
+        const batch = await callApi<MembersResponse>("zoho", "zoho/lists/members", {
+          emails: selectedEmails.slice(start, start + MEMBERS_BATCH_SIZE),
           ...listTarget,
         });
+        result.list_key = batch.list_key;
+        result.list_name = batch.list_name;
         result.results.push(...batch.results);
         result.total += batch.total;
         result.succeeded += batch.succeeded;
         result.failed += batch.failed;
       }
-      set({ exportResult: result });
+      set({ result });
+      const list = result.list_name ? `"${result.list_name}"` : "the list";
       setNotice(
         result.failed
-          ? { kind: "warning", text: `Exported ${result.succeeded} of ${result.total} lead(s); ${result.failed} failed. See details below.` }
-          : { kind: "success", text: `Exported all ${result.total} lead(s) to Zoho.` },
+          ? { kind: "warning", text: `Added ${result.succeeded} of ${result.total} email(s) to ${list}; ${result.failed} failed. See details below.` }
+          : { kind: "success", text: `Added all ${result.total} email(s) to ${list}.` },
       );
     } catch (e) {
-      set({ exportResult: result.total ? result : null });
-      const done = result.total ? ` (${result.total} of ${leads.length} lead(s) were processed before the error.)` : "";
-      setNotice({ kind: "error", text: `Export to Zoho failed: ${(e as Error).message}${done}` });
+      set({ result: result.total ? result : null });
+      const done = result.total ? ` (${result.total} of ${selectedEmails.length} email(s) were processed before the error.)` : "";
+      setNotice({ kind: "error", text: `Adding to the Zoho Campaigns list failed: ${(e as Error).message}${done}` });
     } finally {
-      setExporting(false);
+      setAdding(false);
       // A newly created list should now be selectable.
       if (creatingList) void fetchLists();
     }
@@ -150,15 +171,15 @@ export function ZohoIntegration() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Export Leads to Zoho"
-        subtitle="Get leads saved in the database for a date range, review them, and export them to Zoho CRM and a Zoho Campaigns list."
+        title="Zoho Campaigns Sync"
+        subtitle="Get the leads and contacts created in Zoho CRM for a date range, review them, and add their emails to a Zoho Campaigns list."
       />
 
-      <Card title="Lead date range">
+      <Card title="Created in Zoho CRM" subtitle="Leads and Contacts by their Zoho CRM created date.">
         <div className="grid gap-4 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
           <TextInput label="From date" type="date" value={s.from} max={s.to} onChange={(v) => set({ from: v })} />
           <TextInput label="To date" type="date" value={s.to} min={s.from} onChange={(v) => set({ to: v })} />
-          <Button variant="primary" icon={Search} loading={loading} disabled={rangeInvalid || exporting} onClick={getLeads}>
+          <Button variant="primary" icon={Search} loading={loading} disabled={rangeInvalid || adding} onClick={getRecords}>
             Get leads
           </Button>
         </div>
@@ -172,52 +193,61 @@ export function ZohoIntegration() {
       {notice && <Alert kind={notice.kind}>{notice.text}</Alert>}
 
       {s.loaded ? (
-        <Card title="Leads">
+        <Card title="Leads and contacts">
           <div className="space-y-4">
-            <div className="grid gap-4 sm:grid-cols-3">
-              <Metric label="Leads found" value={s.loaded.leads.length} />
-              <Metric label="Selected to export" value={selectedLeads.length} />
+            <div className="grid gap-4 sm:grid-cols-4">
+              <Metric label="Found in Zoho CRM" value={records.length} />
+              <Metric label="Leads / Contacts"
+                value={`${records.filter((r) => r.Module === "Leads").length} / ${records.filter((r) => r.Module === "Contacts").length}`} />
+              <Metric label="Emails selected" value={selectedEmails.length} />
               <Metric label="Date range" value={`${s.loaded.from} – ${s.loaded.to}`} />
             </div>
 
-            {s.loaded.leads.length ? (
+            {records.length ? (
               <>
+                {withoutEmail > 0 && (
+                  <Alert kind="warning">
+                    {withoutEmail} record(s) have no email, so they can&rsquo;t be added to a Campaigns list.
+                  </Alert>
+                )}
                 <Checkbox
-                  label={`Select all ${s.loaded.leads.length} emails`}
-                  checked={selectedLeads.length === s.loaded.leads.length}
-                  onChange={(v) => set({ selected: s.loaded!.leads.map(() => v) })}
+                  label={`Select all ${records.length - withoutEmail} with an email`}
+                  checked={selectedEmails.length > 0 && records.every((r, i) => !emailOf(r) || s.selected[i])}
+                  onChange={(v) => set({ selected: records.map((r) => v && Boolean(emailOf(r))) })}
                 />
                 <DataTable
-                  rows={s.loaded.leads}
-                  columns={["email", ...Object.keys(s.loaded.leads[0]).filter((k) => k !== "email")]}
+                  rows={records.map((r) => ({
+                    name: r.Full_Name || [r.First_Name, r.Last_Name].filter(Boolean).join(" "),
+                    email: r.Email ?? "",
+                    phone: r.Phone || r.Mobile || "",
+                    company: r.Company ?? "",
+                    type: r.Module === "Leads" ? "Lead" : "Contact",
+                    source: r.Lead_Source ?? "",
+                    created: (r.Created_Time ?? "").slice(0, 16).replace("T", " "),
+                  }))}
+                  columns={["name", "email", "phone", "company", "type", "source", "created"]}
                   selected={s.selected}
                   onSelectedChange={(selected) => set({ selected })}
                 />
               </>
             ) : (
-              <Alert>No leads were saved in this date range.</Alert>
+              <Alert>No leads or contacts were created in Zoho CRM in this date range.</Alert>
             )}
 
-            {s.exportResult && (
+            {s.result && (
               <>
                 <div className="grid gap-4 sm:grid-cols-3">
-                  <Metric label="Exported" value={s.exportResult.total} />
-                  <Metric label="Succeeded" value={s.exportResult.succeeded} />
-                  <Metric label="Failed" value={s.exportResult.failed} />
+                  <Metric label="Emails sent" value={s.result.total} />
+                  <Metric label="Added" value={s.result.succeeded} />
+                  <Metric label="Failed" value={s.result.failed} />
                 </div>
                 <DataTable
-                  rows={s.exportResult.results.map((r) => ({
-                    email: r.email ?? "",
-                    status: r.status,
-                    lead: stageText(r.lead),
-                    campaigns: stageText(r.campaigns),
-                    error: r.error ?? "",
-                  }))}
+                  rows={s.result.results.map((r) => ({ email: r.email, status: r.status, error: r.error ?? "" }))}
                 />
               </>
             )}
 
-            {s.loaded.leads.length > 0 && (
+            {records.length > 0 && (
               <div className="space-y-4 border-t border-line pt-4">
                 <div className="grid gap-4 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
                   <Select
@@ -231,7 +261,7 @@ export function ZohoIntegration() {
                     <TextInput
                       label="New list name"
                       value={s.newListName}
-                      placeholder="e.g. Leads September 2026"
+                      placeholder="e.g. Leads October 2026"
                       onChange={(v) => set({ newListName: v })}
                     />
                   ) : (
@@ -242,15 +272,9 @@ export function ZohoIntegration() {
                   </Button>
                 </div>
                 <div className="flex flex-col items-end gap-3">
-                  {exportHint && <Alert kind="warning">{exportHint}</Alert>}
-                  <Button
-                    variant="primary"
-                    icon={CloudUpload}
-                    loading={exporting}
-                    disabled={loading}
-                    onClick={exportToZoho}
-                  >
-                    Export {selectedLeads.length} to Zoho
+                  {hint && <Alert kind="warning">{hint}</Alert>}
+                  <Button variant="primary" icon={ListPlus} loading={adding} disabled={loading} onClick={addToList}>
+                    Add {selectedEmails.length} to list
                   </Button>
                 </div>
               </div>
@@ -258,7 +282,7 @@ export function ZohoIntegration() {
           </div>
         </Card>
       ) : (
-        <Alert>Pick a date range and click &ldquo;Get leads&rdquo; to review them here.</Alert>
+        <Alert>Pick a date range and click &ldquo;Get leads&rdquo; to review the Zoho CRM leads here.</Alert>
       )}
     </div>
   );

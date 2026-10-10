@@ -13,7 +13,7 @@ Field, score and status definitions for answering client questions:
 |---|---|---|---|
 | Ad generator | `src/app/ad-generator` | ad-generator-backend | `AD_GENERATOR_BACKEND_URL` → `BACKEND_BASE_URL` |
 | Lead source | `src/app/lead-source` | leadscraping-backend | `LEAD_SOURCE_BACKEND_URL` → `BACKEND_URL` → `src/config/lead-source.json` |
-| Export leads to Zoho | `src/app/zoho-integration` | zohoexport | `ZOHO_INTEGRATION_BACKEND_URL` |
+| Zoho Campaigns Sync | `src/app/zoho-integration` | zohoexport | `ZOHO_INTEGRATION_BACKEND_URL` |
 | Bitrix24 Export | `src/app/bitrix-export` | bitrixexport (which exports to the Lead Hub) | `BITRIX_EXPORT_BACKEND_URL` (+ `BITRIX_EXPORT_API_KEY`) |
 | Lead Hub | `src/app/lead-hub` | Lead Hub backend (AWS RDS) (+ zohoexport to sync) | `LEAD_HUB_BACKEND_URL` |
 
@@ -118,21 +118,25 @@ group health check must be `/api/health`; any other path redirects to
 
 Users removed in Azure keep their session until it expires (up to 8 hours).
 
-## Export leads to Zoho: backend contract
+## Zoho Campaigns Sync: backend contract
 
-The "Export leads to Zoho" page (`src/app/zoho-integration`) talks to the
+The "Zoho Campaigns Sync" page (`src/app/zoho-integration`) talks to the
 `zohoexport` backend (`uv run uvicorn zohoexport.api:app --port 8002` in that
-project; its own default port is 8000). The proxy allow-lists three endpoints:
+project; its own default port is 8000). It reads the Leads and Contacts
+created in Zoho CRM in a date range (the Lead Hub's "Sync selected" writes
+Contacts there) and adds the ticked emails to a Zoho Campaigns list. The
+proxy allow-lists these endpoints:
 
 | Endpoint | Request | Response |
 |---|---|---|
-| `GET /records` | `?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD` (inclusive) | `[{"email", "first_name", "last_name"}, ...]` from RDS |
+| `GET /zoho/crm/v8/Leads` | `?created_from=YYYY-MM-DD&created_to=YYYY-MM-DD` (inclusive, `CRM_TIMEZONE`) | `{"data": [...], "info": {"count", "more_records"}}`; each record has `id`, `Module` (`Leads`/`Contacts`), `Full_Name`, `First_Name`, `Last_Name`, `Email`, `Phone`, `Mobile`, `Company`, `City`, `Lead_Source`, `Created_Time`, ... |
 | `GET /zoho/lists` | none | `[{"list_id", "list_name"}, ...]` Zoho Campaigns lists |
-| `POST /zoho/export` | `{"records": [...], "list_key": "..."}` or `{"records": [...], "list_name": "New list"}` | `{"results": [...], "total", "succeeded", "failed"}`; each result has `lead` (Zoho CRM Lead upserted on Email; no Contacts are created) and `campaigns` stage statuses. At most 200 records per request |
+| `POST /zoho/lists/members` | `{"emails": [...], "list_key": "..."}` or `{"emails": [...], "list_name": "New list"}` (a missing list is created) | `{"list_key", "list_name", "results": [{"email", "status", "error"}], "total", "succeeded", "failed"}`. At most 200 emails per request |
+| `POST /zoho/crm/contacts` | `{"records": [{"email", "first_name", "last_name", "Phone", ...}]}` | `{"results": [...], "total", "succeeded", "failed"}`; Contacts upserted on Email. Used by the Lead Hub page |
 
-The page sends the fetched leads to `/zoho/export` in batches of 200 and sums the
-results. `/records` rejects ranges over 366 days or more than 10,000 rows (422). Errors: a non-2xx status
-with FastAPI-style `{"detail": "..."}` is shown to the user.
+The page sends the ticked emails (records without an email are skipped) in
+batches of 200 and sums the results. Invalid dates return 422. Errors: a
+non-2xx status with FastAPI-style `{"detail": "..."}` is shown to the user.
 
 ## Bitrix export: backend contract
 
@@ -190,9 +194,9 @@ is set:
 page filters by it. `zoho_sync_status` is e.g. `pending` or `synced`; leads already
 `synced` start unchecked.
 
-The page syncs the selected leads (or all shown with an email and last name) to
-Zoho through the Zoho module's `POST /zoho/export` and `GET /zoho/lists` (above),
-so the Zoho backend must be running too. The Lead Hub has no endpoint to record
+The page syncs the ticked leads (those with an email) to Zoho CRM as Contacts
+through the Zoho module's `POST /zoho/crm/contacts` (above), so the Zoho backend
+must be running too. The Lead Hub has no endpoint to record
 a sync yet, so `zoho_sync_status` doesn't change after a sync; the page marks
 leads synced in this tab.
 

@@ -4,16 +4,17 @@ import { notFound, proxyJson } from "@/lib/server/proxy";
 
 // Only these zohoexport backend endpoints are reachable through the proxy,
 // each with its own timeout (contract in the README):
-//   GET  records?start_date&end_date                 -> [{email, first_name, last_name}, ...]
+//   GET  zoho/crm/v8/Leads?created_from&created_to   -> {data: [Lead/Contact, ...], info}
 //   GET  zoho/lists                                  -> [{list_id, list_name}, ...]
-//   POST zoho/export {records, list_key | list_name} -> {results, total, succeeded, failed}
+//   POST zoho/lists/members {emails, list_key | list_name} -> {list_key, list_name, results, total, succeeded, failed}
 //   POST zoho/crm/contacts {records}                 -> {results, total, succeeded, failed} (Lead Hub sync)
 const GET_ENDPOINTS = new Map([
-  ["records", 60_000],
+  // The backend pages through Zoho's search API itself, so large ranges take a while.
+  ["zoho/crm/v8/Leads", 180_000],
   ["zoho/lists", 60_000],
 ]);
 const POST_ENDPOINTS = new Map([
-  ["zoho/export", 600_000],
+  ["zoho/lists/members", 600_000],
   ["zoho/crm/contacts", 600_000],
 ]);
 

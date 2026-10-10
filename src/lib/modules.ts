@@ -64,7 +64,7 @@ export const MODULES: Module[] = [
   },
   {
     label: "Zoho Campaigns Sync",
-    description: "Export leads to Zoho CRM and a Zoho Campaigns list.",
+    description: "Add Zoho CRM leads to a Zoho Campaigns list.",
     icon: CloudUpload,
     group: "activate",
   },
