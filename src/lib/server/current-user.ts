@@ -1,10 +1,12 @@
 import "server-only";
 import { headers } from "next/headers";
+import { auth, authEnabled, missingAuthEnv } from "@/auth";
 
-// The app has no login of its own: sign-in happens in front of it (ALB
-// authentication with Cognito / OIDC), which adds the signed-in user's claims
-// to every request as `x-amzn-oidc-data` (a JWT). The ALB has already verified
-// it and strips any client-sent copy, so the payload is only decoded here.
+// The signed-in user comes from Microsoft SSO (src/auth.ts) when it is on.
+// Otherwise sign-in may happen in front of the app (ALB authentication with
+// Cognito / OIDC), which adds the user's claims to every request as
+// `x-amzn-oidc-data` (a JWT). The ALB has already verified it and strips any
+// client-sent copy, so the payload is only decoded here.
 
 type Claims = { name?: string; given_name?: string; email?: string; preferred_username?: string };
 
@@ -19,8 +21,13 @@ function decodeJwtPayload(token: string): Claims | null {
 }
 
 /** Display name of the signed-in user, or null when the request carries none.
- * DEV_USER_NAME stands in locally, where there is no ALB. */
+ * DEV_USER_NAME stands in locally, where there is no sign-in. */
 export async function currentUserName(): Promise<string | null> {
+  if (authEnabled() && missingAuthEnv().length === 0) {
+    const ssoName = (await auth())?.user?.name?.trim();
+    // First name only, as with the ALB's given_name.
+    if (ssoName) return ssoName.split(/\s+/)[0];
+  }
   const h = await headers();
   const oidc = h.get("x-amzn-oidc-data");
   const claims = oidc ? decodeJwtPayload(oidc) : null;
