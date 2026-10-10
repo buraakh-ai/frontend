@@ -296,7 +296,7 @@ export function LeadSource({ config, warning }: { config: LeadConfig; warning: s
   const placesQueries = providers.includes("google_places") ? Math.min(searchCells, plannedQueries) : 0;
   const shape: RunShape = {
     sources: sourceCount,
-    serpQueries: (plannedQueries - placesQueries) * form.pagesPerQuery,
+    webQueries: (plannedQueries - placesQueries) * form.pagesPerQuery,
     placesQueries: placesQueries * form.pagesPerQuery,
     resultsPerQuery: form.resultsPerQuery,
     batchSize: form.batchSize,
@@ -517,7 +517,7 @@ export function LeadSource({ config, warning }: { config: LeadConfig; warning: s
                   <Checkbox label="Find decision makers (owner, founder, manager)" checked={form.findDecisionMakers}
                     onChange={(findDecisionMakers) => setForm({ findDecisionMakers })} />
                   <p className="mt-1 pl-6.5 text-xs text-muted">
-                    Adds one web search per business. Turn off for faster, cheaper runs that return business contacts only.
+                    Reads each business’s team page and searches the web (free) for its owner or managers. Turn off for faster runs that return business contacts only.
                   </p>
                 </div>
                 <div className="px-4 py-3">

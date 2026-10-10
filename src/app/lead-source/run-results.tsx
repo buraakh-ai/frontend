@@ -2,7 +2,7 @@
 
 import { CheckCircle2, CircleStop, ExternalLink, Mail, Phone, UserRound } from "lucide-react";
 import { Checkbox, DataTable, Expander, JsonView } from "@/components/ui";
-import { formatCount, formatDuration, formatUsd, num, text, type Row, type Usage } from "./format";
+import { formatCount, formatDuration, formatUsd, num, paidSearches, text, type Row, type Usage } from "./format";
 
 /** Hero summary of a finished run: what it found, how long it took, what it cost. */
 export function RunSummaryBanner({ leads, seconds, usage, target, stopped }: {
@@ -14,6 +14,13 @@ export function RunSummaryBanner({ leads, seconds, usage, target, stopped }: {
 }) {
   const count = leads.length;
   const cost = num(usage?.total_cost_usd);
+  const searchCost = num(usage?.api_cost_usd);
+  // What the per-lead cost paid for: normally only the AI, since searches are free.
+  const perLeadHint = !usage || !count
+    ? undefined
+    : searchCost
+      ? `AI ${formatUsd(num(usage.llm_cost_usd) / count)} + search ${formatUsd(searchCost / count)} per lead`
+      : "AI reading each business's site and writing up the lead; searches are free";
   const count_of = (f: (l: Row) => boolean) => leads.filter(f).length;
 
   return (
@@ -41,7 +48,7 @@ export function RunSummaryBanner({ leads, seconds, usage, target, stopped }: {
       <div className="mt-6 grid grid-cols-2 gap-px border-t border-white/10 bg-white/10 md:grid-cols-4">
         <Stat label="Total cost" value={usage ? formatUsd(cost) : "—"}
           hint={usage ? `AI ${formatUsd(num(usage.llm_cost_usd))} · search ${formatUsd(num(usage.api_cost_usd))}` : "Not reported by the backend"} />
-        <Stat label="Cost per lead" value={usage && count ? formatUsd(cost / count) : "—"} />
+        <Stat label="Cost per lead" value={usage && count ? formatUsd(cost / count) : "—"} hint={perLeadHint} />
         <Stat label="AI tokens" value={usage ? formatCount(num(usage.total_tokens)) : "—"}
           hint={usage?.model ? `${usage.model} · ${num(usage.llm_runs)} calls` : undefined} />
         <Stat label="Time per lead" value={count ? formatDuration(seconds / count) : "—"} />
@@ -72,10 +79,25 @@ const STATUS_STYLE: Record<string, string> = {
   incomplete: "bg-canvas text-muted",
 };
 
-function ScoreBar({ score }: { score: number }) {
+// Points per contact detail, mirrored by hand from the Lead source backend's
+// lead_quality.score_and_deduplicate_leads (keep in sync).
+const SCORE_POINTS: [string, number, (l: Row) => unknown][] = [
+  ["Business email", 25, (l) => l.business_email],
+  ["Phone", 20, (l) => l.phone],
+  ["Decision maker's name", 20, (l) => l.decision_maker_name],
+  ["Decision maker's role", 10, (l) => l.decision_maker_role],
+  ["LinkedIn", 10, (l) => l.linkedin_url || l.company_linkedin_url],
+  ["Website", 10, (l) => l.website],
+  ["Source page", 5, (l) => (Array.isArray(l.source_urls) && l.source_urls.length) || l.source_url],
+];
+const SCORE_NOTE = SCORE_POINTS.map(([label, points]) => `${label.toLowerCase()} ${points}`).join(" · ");
+
+function ScoreBar({ lead }: { lead: Row }) {
+  const score = num(lead.lead_score);
   const tone = score >= 70 ? "bg-success" : score >= 45 ? "bg-ocean" : "bg-muted/50";
+  const earned = SCORE_POINTS.filter(([, , has]) => has(lead)).map(([label, points]) => `${label} +${points}`);
   return (
-    <div className="flex items-center gap-2" title={`Lead score ${score} / 100`}>
+    <div className="flex items-center gap-2" title={[`Lead score ${score} / 100`, ...earned].join("\n")}>
       <div className="h-1.5 w-14 overflow-hidden rounded-full bg-line">
         <div className={`h-full rounded-full ${tone}`} style={{ width: `${score}%` }} />
       </div>
@@ -172,7 +194,7 @@ export function LeadTable({ leads, selected, exported, onSelectedChange }: {
                       </a>
                     ) : null}
                   </td>
-                  <td className="px-3 py-3"><ScoreBar score={num(lead.lead_score)} /></td>
+                  <td className="px-3 py-3"><ScoreBar lead={lead} /></td>
                   <td className="px-3 py-3">
                     <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold capitalize ${STATUS_STYLE[status] ?? STATUS_STYLE.incomplete}`}>
                       {status}
@@ -187,6 +209,10 @@ export function LeadTable({ leads, selected, exported, onSelectedChange }: {
           </tbody>
         </table>
       </div>
+      <p className="border-t border-line bg-canvas px-4 py-2.5 text-xs text-muted">
+        <span className="font-semibold text-navy">Score (0–100)</span> adds points for each contact detail found:{" "}
+        {SCORE_NOTE}. It measures how reachable a lead is, not how good a prospect it is. Hover a score for its breakdown.
+      </p>
     </div>
   );
 }
@@ -244,7 +270,9 @@ export function RunDetails({ summary, sources, usage, leads }: { summary: Row | 
                   ["AI calls", num(usage.llm_runs)],
                   ["Tokens in / out", `${formatCount(num(usage.input_tokens))} / ${formatCount(num(usage.output_tokens))}`],
                   ["AI cost", usage.llm_priced || !usage.total_tokens ? formatUsd(num(usage.llm_cost_usd)) : "No price set for this model"],
-                  ["Web searches (SerpAPI)", num(usage.serpapi_searches)],
+                  ["Free web searches", num(usage.free_searches)],
+                  ["Directory lookups (free)", num(usage.directory_pages)],
+                  ["Free-tier API searches (Tavily, Brave)", paidSearches(usage)],
                   ["Google Places lookups", num(usage.places_text_searches) + num(usage.places_details)],
                   ["Search cost", formatUsd(num(usage.api_cost_usd))],
                   ["Total", formatUsd(num(usage.total_cost_usd))],

@@ -5,8 +5,8 @@
 
 export type RunShape = {
   sources: number; // businesses to check
-  serpQueries: number; // discovery searches through SerpAPI
-  placesQueries: number; // discovery searches through Google Places
+  webQueries: number; // free discovery searches (Yellow Pages, OpenStreetMap, web search engines)
+  placesQueries: number; // paid discovery searches through Google Places
   resultsPerQuery: number;
   batchSize: number;
   concurrency: number;
@@ -17,29 +17,24 @@ export type RunRecord = { leads: number; seconds: number; cost: number; estSecon
 export type Estimate = { seconds: number; cost: number; fromHistory: number };
 
 // List prices; keep in sync by hand with the backend's settings (usage.py).
-const SERPAPI_SEARCH = 0.015;
+// Web searches and directory pages are free (SearXNG, DDGS, Yellow Pages,
+// OpenStreetMap); only Google Places and the AI model cost money.
 const PLACES_TEXT_SEARCH = 0.032;
 const PLACES_DETAILS = 0.02;
 // Measured on test runs (gpt-4o-mini, evidence-first enrichment):
 const AI_PER_BUSINESS = 0.0002; // ~900 tokens each
-const WEBSITE_LOOKUP_SHARE = 0.5; // directory results needing a search for their own site
-const EMAIL_SEARCH_SHARE = 0.5; // businesses with no email on their own website
 const DISCOVERY_SECONDS = 12; // per chunk of parallel discovery searches
 const DISCOVERY_CHUNK = 6;
-const BATCH_SECONDS = 45; // scraping + one AI call, for a batch of up to ~10
+const BATCH_SECONDS = 60; // scraping, free searches + one AI call, for a batch of up to ~10
 
 export function estimateShape(shape: RunShape): { seconds: number; cost: number } {
-  const discoveryChunks = Math.max(1, Math.ceil((shape.serpQueries + shape.placesQueries) / DISCOVERY_CHUNK));
+  const discoveryChunks = Math.max(1, Math.ceil((shape.webQueries + shape.placesQueries) / DISCOVERY_CHUNK));
   const batches = Math.max(1, Math.ceil(shape.sources / Math.max(shape.batchSize, 1)));
   const waves = Math.ceil(batches / Math.max(shape.concurrency, 1));
   const seconds = discoveryChunks * DISCOVERY_SECONDS + waves * BATCH_SECONDS;
 
-  const perBusinessSearches =
-    WEBSITE_LOOKUP_SHARE + (shape.findDecisionMakers ? 1 : 0) + (shape.searchForEmails ? EMAIL_SEARCH_SHARE : 0);
   const cost =
-    shape.serpQueries * SERPAPI_SEARCH +
-    shape.placesQueries * (PLACES_TEXT_SEARCH + shape.resultsPerQuery * PLACES_DETAILS) +
-    shape.sources * (perBusinessSearches * SERPAPI_SEARCH + AI_PER_BUSINESS);
+    shape.placesQueries * (PLACES_TEXT_SEARCH + shape.resultsPerQuery * PLACES_DETAILS) + shape.sources * AI_PER_BUSINESS;
   return { seconds, cost };
 }
 

@@ -7,11 +7,15 @@ import { notFound, proxyJson } from "@/lib/server/proxy";
 //   GET  records?start_date&end_date                 -> [{email, first_name, last_name}, ...]
 //   GET  zoho/lists                                  -> [{list_id, list_name}, ...]
 //   POST zoho/export {records, list_key | list_name} -> {results, total, succeeded, failed}
+//   POST zoho/crm/contacts {records}                 -> {results, total, succeeded, failed} (Lead Hub sync)
 const GET_ENDPOINTS = new Map([
   ["records", 60_000],
   ["zoho/lists", 60_000],
 ]);
-const POST_ENDPOINTS = new Map([["zoho/export", 600_000]]);
+const POST_ENDPOINTS = new Map([
+  ["zoho/export", 600_000],
+  ["zoho/crm/contacts", 600_000],
+]);
 
 export async function GET(request: NextRequest, ctx: RouteContext<"/api/zoho/[...path]">) {
   const path = (await ctx.params).path.join("/");

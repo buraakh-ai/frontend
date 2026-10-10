@@ -6,6 +6,9 @@ Montserrat/Roboto). It replaced the earlier Streamlit app. It holds no business
 logic and no secrets: each module calls **its own backend** through a
 server-side proxy. No backend changes are needed.
 
+Field, score and status definitions for answering client questions:
+[docs/glossary.md](docs/glossary.md).
+
 | Module | Page | Backend | Backend URL env |
 |---|---|---|---|
 | Ad generator | `src/app/ad-generator` | ad-generator-backend | `AD_GENERATOR_BACKEND_URL` → `BACKEND_BASE_URL` |

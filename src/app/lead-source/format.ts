@@ -2,7 +2,7 @@
 
 export type Row = Record<string, unknown>;
 
-/** Tokens, paid API calls and estimated cost of a run (backend usage.py). */
+/** Tokens, API calls and estimated cost of a run (backend usage.py). */
 export type Usage = {
   model: string | null;
   llm_priced: boolean;
@@ -10,7 +10,10 @@ export type Usage = {
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
-  serpapi_searches: number;
+  free_searches: number; // SearXNG / DDGS web searches
+  directory_pages: number; // Yellow Pages / OpenStreetMap lookups (free)
+  tavily_searches: number;
+  brave_searches: number;
   places_text_searches: number;
   places_details: number;
   llm_cost_usd: number;
@@ -45,6 +48,10 @@ export function formatCount(v: number): string {
   return String(v);
 }
 
-export const searchCalls = (u: Usage) => num(u.serpapi_searches) + num(u.places_text_searches) + num(u.places_details);
+export const searchCalls = (u: Usage) =>
+  num(u.free_searches) + num(u.directory_pages) + paidSearches(u) + num(u.places_text_searches) + num(u.places_details);
+
+/** Searches through APIs with a free monthly allowance (Tavily, Brave). */
+export const paidSearches = (u: Usage) => num(u.tavily_searches) + num(u.brave_searches);
 
 export const text = (v: unknown) => (v === null || v === undefined ? "" : String(v));
