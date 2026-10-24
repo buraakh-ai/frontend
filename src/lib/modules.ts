@@ -64,8 +64,9 @@ export const MODULES: Module[] = [
   },
   {
     label: "Zoho Campaigns Sync",
-    description: "Add Zoho CRM leads to a Zoho Campaigns list.",
+    description: "Create and send Zoho Campaigns emails, and manage Campaigns lists.",
     icon: CloudUpload,
     group: "activate",
+    href: "/zoho-integration",
   },
 ];

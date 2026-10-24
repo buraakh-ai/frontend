@@ -108,16 +108,19 @@ export function Button({ variant = "secondary", icon: Icon, loading, block, clas
 }
 
 export function Field({ label, hint, children, htmlFor }: {
-  label: string;
+  // Without one, give the control an aria-label.
+  label?: string;
   hint?: string;
   children: ReactNode;
   htmlFor?: string;
 }) {
   return (
     <div className="space-y-1.5">
-      <label htmlFor={htmlFor} className="block text-sm font-medium text-navy">
-        {label}
-      </label>
+      {label && (
+        <label htmlFor={htmlFor} className="block text-sm font-medium text-navy">
+          {label}
+        </label>
+      )}
       {children}
       {hint && <p className="text-xs text-muted">{hint}</p>}
     </div>
@@ -128,7 +131,7 @@ const control =
   "w-full rounded-lg border border-line bg-white px-3 py-2.5 text-sm text-ink placeholder:text-gray-400 " +
   "focus:border-ocean focus:outline-none focus:ring-2 focus:ring-ocean/20 disabled:bg-canvas disabled:text-muted";
 
-type InputProps = { label: string; hint?: string; value: string; onChange: (v: string) => void } & Omit<
+type InputProps = { label?: string; hint?: string; value: string; onChange: (v: string) => void } & Omit<
   React.InputHTMLAttributes<HTMLInputElement>,
   "value" | "onChange"
 >;
@@ -156,17 +159,18 @@ export function TextArea({ label, hint, value, onChange, rows = 3, ...rest }: Te
   );
 }
 
-export function Select<T extends string>({ label, value, options, onChange, format }: {
+export function Select<T extends string>({ label, value, options, onChange, format, disabled }: {
   label: string;
   value: T;
   options: readonly T[];
   onChange: (v: T) => void;
   format?: (v: T) => string;
+  disabled?: boolean;
 }) {
   const id = useId();
   return (
     <Field label={label} htmlFor={id}>
-      <select id={id} className={control} value={value} onChange={(e) => onChange(e.target.value as T)}>
+      <select id={id} className={control} value={value} disabled={disabled} onChange={(e) => onChange(e.target.value as T)}>
         {options.map((o) => (
           <option key={o} value={o}>
             {format ? format(o) : o}
@@ -404,11 +408,13 @@ export function ChipSelect({ label, options, selected, onChange, format }: {
   );
 }
 
-export function SegmentedControl<T extends string>({ label, options, value, onChange }: {
+export function SegmentedControl<T extends string>({ label, options, value, onChange, disabled = [] }: {
   label: string;
   options: readonly T[];
   value: T;
   onChange: (v: T) => void;
+  // Options shown but not selectable for now.
+  disabled?: readonly T[];
 }) {
   return (
     <fieldset className="space-y-1.5">
@@ -419,10 +425,11 @@ export function SegmentedControl<T extends string>({ label, options, value, onCh
             key={o}
             type="button"
             aria-pressed={o === value}
+            disabled={disabled.includes(o)}
             onClick={() => onChange(o)}
             className={cx(
-              "rounded px-3 py-1.5 text-sm font-medium transition-colors",
-              o === value ? "bg-white text-navy shadow-sm" : "text-muted hover:text-navy",
+              "rounded px-3 py-1.5 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+              o === value ? "bg-white text-navy shadow-sm" : "text-muted enabled:hover:text-navy",
             )}
           >
             {o}

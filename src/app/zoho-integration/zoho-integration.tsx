@@ -1,10 +1,16 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ListPlus, RefreshCw, Search } from "lucide-react";
+import { FolderPlus, ListPlus, RefreshCw, Search } from "lucide-react";
 import { callApi } from "@/lib/backend-result";
 import { createStore } from "@/lib/store";
-import { Alert, Button, Card, Checkbox, DataTable, Metric, PageHeader, Select, TextInput } from "@/components/ui";
+import {
+  Alert, Button, Card, Checkbox, DataTable, Metric, PageHeader, SegmentedControl, Select, Tabs, TextInput,
+} from "@/components/ui";
+import { CloneCampaign } from "./clone-campaign";
+import { CreateCampaign, type CampaignList } from "./create-campaign";
+
+const CAMPAIGN_MODES = ["Copy an existing campaign", "New from a content URL"] as const;
 
 /** GET /zoho/crm/v8/Leads record: a CRM Lead or Contact (same keys for both, null when empty). */
 type CrmRecord = {
@@ -23,7 +29,6 @@ type CrmRecord = {
   Created_Time: string | null;
 };
 type LeadsResponse = { data: CrmRecord[]; info: { count: number; more_records: boolean } };
-type CampaignList = { list_id: string; list_name: string | null };
 /** POST /zoho/lists/members response. */
 type MembersResponse = {
   list_key: string | null;
@@ -33,18 +38,24 @@ type MembersResponse = {
   succeeded: number;
   failed: number;
 };
+/** POST /zoho/lists response. */
+type CreatedList = { list_key: string; list_name: string };
 type Notice = { kind: "success" | "error" | "warning"; text: string };
 
-const NEW_LIST = "__new__";
 // The backend accepts at most this many emails per /zoho/lists/members request.
 const MEMBERS_BATCH_SIZE = 200;
 
 const isoDay = (d: Date) => d.toISOString().slice(0, 10);
 const daysAgo = (n: number) => isoDay(new Date(Date.now() - n * 86_400_000));
 const emailOf = (r: CrmRecord) => r.Email?.trim() ?? "";
+const looksLikeEmail = (e: string) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e);
 
 // Kept for the life of the tab, so loaded records survive switching modules.
 const store = createStore({
+  // Manage lists comes first: build the list, then send a campaign to it.
+  tab: "lists" as "lists" | "campaign",
+  // On the campaign tab: copy a campaign (list -> clone -> send) or build one from a content URL.
+  campaignMode: CAMPAIGN_MODES[0] as (typeof CAMPAIGN_MODES)[number],
   from: daysAgo(7),
   to: isoDay(new Date()),
   // The range the shown records were fetched for (the inputs may since have changed).
@@ -52,7 +63,11 @@ const store = createStore({
   // Which loaded records to add (by row); every one with an email starts ticked.
   selected: [] as boolean[],
   lists: null as CampaignList[] | null,
+  listsError: null as string | null,
   listChoice: "",
+  // Ticked "Create a new list": the dropdown is read-only and the button
+  // becomes "Create list and add contacts".
+  creatingList: false,
   newListName: "",
   result: null as MembersResponse | null,
 });
@@ -69,8 +84,11 @@ export function ZohoIntegration() {
 
   const fetchLists = () =>
     callApi<CampaignList[]>("zoho", "zoho/lists").then(
-      (lists) => set({ lists }),
-      (e: Error) => setNotice({ kind: "error", text: `Could not load Zoho Campaigns lists: ${e.message}` }),
+      (lists) => set({ lists, listsError: null }),
+      (e: Error) => {
+        set({ listsError: e.message });
+        setNotice({ kind: "error", text: `Could not load Zoho Campaigns lists: ${e.message}` });
+      },
     );
 
   async function loadLists() {
@@ -100,36 +118,47 @@ export function ZohoIntegration() {
     }
   }
 
-  const creatingList = s.listChoice === NEW_LIST;
-  const listTarget = creatingList
-    ? s.newListName.trim() && { list_name: s.newListName.trim() }
-    : s.listChoice && { list_key: s.listChoice };
-  const listLabel = creatingList
-    ? `new list "${s.newListName.trim()}"`
-    : `list "${s.lists?.find((l) => l.list_id === s.listChoice)?.list_name ?? s.listChoice}"`;
+  const newListName = s.newListName.trim();
+  const newListTaken = s.lists?.some((l) => (l.list_name ?? "").trim().toLowerCase() === newListName.toLowerCase());
   const records = s.loaded?.records ?? [];
   // A Campaigns list member is an email address, so records without one are skipped.
   const selectedEmails = [...new Set(records.filter((r, i) => s.selected[i] && emailOf(r)).map(emailOf))];
   const withoutEmail = records.filter((r) => !emailOf(r)).length;
 
+  // The ticked "Create a new list" box decides the button: create a list and add
+  // to it (two APIs), or add to the list chosen in the dropdown (one API).
   async function addToList() {
+    const creating = s.creatingList;
+    // Zoho can't create an empty list, so the new list is seeded with one valid email.
+    const seed = selectedEmails.find(looksLikeEmail);
     // Say what's missing rather than leaving the button disabled with no reason.
     const missing = !selectedEmails.length
       ? "Select at least one lead with an email."
-      : !s.listChoice
-        ? "Choose a Zoho Campaigns list (or \"+ Create a new list\") first."
-        : !listTarget
+      : !creating
+        ? !s.listChoice ? "Choose a Zoho Campaigns list first, or tick \"Create a new list\"." : null
+        : !newListName
           ? "Enter a name for the new list first."
-          : null;
+          : newListTaken
+            ? `A list named "${newListName}" already exists: untick "Create a new list" and choose it instead.`
+            : !seed
+              ? "None of the selected emails is a valid address, so the list can't be created."
+              : null;
     setHint(missing);
-    if (missing || !listTarget) return;
-    if (!window.confirm(`Add ${selectedEmails.length} email(s) to the Zoho Campaigns ${listLabel}?`)) return;
+    if (missing) return;
+    const question = creating
+      ? `Create the Zoho Campaigns list "${newListName}" and add ${selectedEmails.length} email(s) to it?`
+      : `Add ${selectedEmails.length} email(s) to the Zoho Campaigns list "${s.lists?.find((l) => l.list_id === s.listChoice)?.list_name ?? s.listChoice}"?`;
+    if (!window.confirm(question)) return;
     setNotice(null);
     setAdding(true);
-    // Batches go one after another; a new list is created by the first batch
-    // and later batches find it again by name.
+    let created: CreatedList | null = null;
     const result: MembersResponse = { list_key: null, list_name: null, results: [], total: 0, succeeded: 0, failed: 0 };
     try {
+      if (creating) {
+        created = await callApi<CreatedList>("zoho", "zoho/lists", { list_name: newListName, emails: [seed] });
+      }
+      const listTarget = created ? { list_key: created.list_key, list_name: created.list_name } : { list_key: s.listChoice };
+      // Batches go one after another.
       for (let start = 0; start < selectedEmails.length; start += MEMBERS_BATCH_SIZE) {
         const batch = await callApi<MembersResponse>("zoho", "zoho/lists/members", {
           emails: selectedEmails.slice(start, start + MEMBERS_BATCH_SIZE),
@@ -144,38 +173,62 @@ export function ZohoIntegration() {
       }
       set({ result });
       const list = result.list_name ? `"${result.list_name}"` : "the list";
+      const made = created ? "Created the list and added" : "Added";
       setNotice(
         result.failed
-          ? { kind: "warning", text: `Added ${result.succeeded} of ${result.total} email(s) to ${list}; ${result.failed} failed. See details below.` }
-          : { kind: "success", text: `Added all ${result.total} email(s) to ${list}.` },
+          ? { kind: "warning", text: `${made} ${result.succeeded} of ${result.total} email(s) to ${list}; ${result.failed} failed. See details below.` }
+          : { kind: "success", text: `${made} all ${result.total} email(s) to ${list}.` },
       );
     } catch (e) {
       set({ result: result.total ? result : null });
       const done = result.total ? ` (${result.total} of ${selectedEmails.length} email(s) were processed before the error.)` : "";
-      setNotice({ kind: "error", text: `Adding to the Zoho Campaigns list failed: ${(e as Error).message}${done}` });
+      const step = creating && !created ? "Creating the Zoho Campaigns list" : "Adding to the Zoho Campaigns list";
+      const exists = created ? ` The list "${created.list_name}" was created and is now chosen: click "Add to list" to retry.` : "";
+      setNotice({ kind: "error", text: `${step} failed: ${(e as Error).message}${done}${exists}` });
     } finally {
       setAdding(false);
-      // A newly created list should now be selectable.
-      if (creatingList) void fetchLists();
+      if (created) {
+        // Show the new list as the chosen one, ready for the next add.
+        set({ listChoice: created.list_key, creatingList: false, newListName: "" });
+        void fetchLists();
+      }
     }
   }
 
-  const listOptions = ["", ...(s.lists ?? []).map((l) => l.list_id), NEW_LIST];
-  const formatList = (id: string) =>
-    id === ""
-      ? "Choose a list…"
-      : id === NEW_LIST
-        ? "+ Create a new list"
-        : (s.lists?.find((l) => l.list_id === id)?.list_name ?? id);
+  const listOptions = ["", ...(s.lists ?? []).map((l) => l.list_id)];
+  const formatList = (id: string) => (id === "" ? "Choose a list…" : (s.lists?.find((l) => l.list_id === id)?.list_name ?? id));
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Zoho Campaigns Sync"
-        subtitle="Get the leads and contacts created in Zoho CRM for a date range, review them, and add their emails to a Zoho Campaigns list."
+        subtitle="Build Zoho Campaigns lists from Zoho CRM leads, then create and send email campaigns to them."
       />
 
-      <Card title="Created in Zoho CRM" subtitle="Leads and Contacts by their Zoho CRM created date.">
+      <Tabs
+        tabs={[
+          { id: "lists", label: "Manage lists" },
+          { id: "campaign", label: "Create campaign" },
+        ]}
+        active={s.tab}
+        onChange={(tab) => set({ tab })}
+      />
+
+      {s.tab === "campaign" ? (
+        <div className="space-y-6">
+          {/* "New from a content URL" is read-only for now: copying is the supported flow. */}
+          <SegmentedControl label="Start from" options={CAMPAIGN_MODES} value={s.campaignMode}
+            disabled={[CAMPAIGN_MODES[1]]} onChange={(campaignMode) => set({ campaignMode })} />
+          {s.campaignMode === CAMPAIGN_MODES[0] ? (
+            <CloneCampaign />
+          ) : (
+            <CreateCampaign lists={s.lists} listsError={s.listsError} refreshLists={fetchLists} />
+          )}
+        </div>
+      ) : (
+      <>
+
+      <Card title="Add from Zoho CRM" subtitle="Leads and Contacts by their Zoho CRM created date.">
         <div className="grid gap-4 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
           <TextInput label="From date" type="date" value={s.from} max={s.to} onChange={(v) => set({ from: v })} />
           <TextInput label="To date" type="date" value={s.to} min={s.from} onChange={(v) => set({ to: v })} />
@@ -255,27 +308,42 @@ export function ZohoIntegration() {
                     value={s.listChoice}
                     options={listOptions}
                     format={formatList}
+                    // Read-only while "Create a new list" is ticked.
+                    disabled={s.creatingList || adding}
                     onChange={(v) => set({ listChoice: v })}
                   />
-                  {creatingList ? (
+                  <div className="space-y-1.5">
+                    <Checkbox
+                      label="Create a new list"
+                      checked={s.creatingList}
+                      onChange={(creatingList) => {
+                        set({ creatingList });
+                        setHint(null);
+                      }}
+                    />
                     <TextInput
-                      label="New list name"
+                      aria-label="New list name"
                       value={s.newListName}
                       placeholder="e.g. Leads October 2026"
+                      disabled={!s.creatingList || adding}
                       onChange={(v) => set({ newListName: v })}
                     />
-                  ) : (
-                    <div />
-                  )}
+                  </div>
                   <Button icon={RefreshCw} loading={loadingLists} onClick={loadLists}>
                     Refresh lists
                   </Button>
                 </div>
                 <div className="flex flex-col items-end gap-3">
                   {hint && <Alert kind="warning">{hint}</Alert>}
-                  <Button variant="primary" icon={ListPlus} loading={adding} disabled={loading} onClick={addToList}>
-                    Add {selectedEmails.length} to list
-                  </Button>
+                  {s.creatingList ? (
+                    <Button variant="primary" icon={FolderPlus} loading={adding} disabled={loading} onClick={addToList}>
+                      Create list and add {selectedEmails.length} contacts
+                    </Button>
+                  ) : (
+                    <Button variant="primary" icon={ListPlus} loading={adding} disabled={loading} onClick={addToList}>
+                      Add {selectedEmails.length} to list
+                    </Button>
+                  )}
                 </div>
               </div>
             )}
@@ -283,6 +351,8 @@ export function ZohoIntegration() {
         </Card>
       ) : (
         <Alert>Pick a date range and click &ldquo;Get leads&rdquo; to review the Zoho CRM leads here.</Alert>
+      )}
+      </>
       )}
     </div>
   );

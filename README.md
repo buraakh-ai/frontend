@@ -132,10 +132,19 @@ proxy allow-lists these endpoints:
 | `GET /zoho/crm/v8/Leads` | `?created_from=YYYY-MM-DD&created_to=YYYY-MM-DD` (inclusive, `CRM_TIMEZONE`) | `{"data": [...], "info": {"count", "more_records"}}`; each record has `id`, `Module` (`Leads`/`Contacts`), `Full_Name`, `First_Name`, `Last_Name`, `Email`, `Phone`, `Mobile`, `Company`, `City`, `Lead_Source`, `Created_Time`, ... |
 | `GET /zoho/lists` | none | `[{"list_id", "list_name"}, ...]` Zoho Campaigns lists |
 | `POST /zoho/lists/members` | `{"emails": [...], "list_key": "..."}` or `{"emails": [...], "list_name": "New list"}` (a missing list is created) | `{"list_key", "list_name", "results": [{"email", "status", "error"}], "total", "succeeded", "failed"}`. At most 200 emails per request |
+| `POST /zoho/lists` | `{"list_name", "emails": [...], "description"?}` (at least one email; name must be new) | `{"list_key", "list_name", "message"}` |
+| `GET /zoho/campaigns` | `?range=20` | `[{"campaign_key", "campaign_name", "campaign_status", "created_date_string", "sent_date_string", ...}]` |
+| `POST /zoho/campaigns` | `{"campaign_name", "subject", "from_email", "from_name"?, "list_keys": [...], "content_url"}` (public http(s) HTML) | `{"campaign_key", "message"}`; a **draft** |
+| `POST /zoho/campaigns/{campaign_key}/clone` | `{"campaign_name", "subject", "from_name"?, "from_email"?, "reply_to"?}` (empty = the original's) | Zoho's response `{"campaign_status", "details"}`; a new **draft** with the original's content and lists. The page reads the new key from `details` or, failing that, finds the new campaign by its (required unique) name |
+| `POST /zoho/campaigns/{campaign_key}/send` | `{}` (send now) | Zoho's response. Emails real people |
 | `POST /zoho/crm/contacts` | `{"records": [{"email", "first_name", "last_name", "Phone", ...}]}` | `{"results": [...], "total", "succeeded", "failed"}`; Contacts upserted on Email. Used by the Lead Hub page |
 
 The page sends the ticked emails (records without an email are skipped) in
-batches of 200 and sums the results. Invalid dates return 422. Errors: a
+batches of 200 and sums the results. "Add to list" calls `POST /zoho/lists/members`
+with the chosen `list_key`; with "Create a new list" ticked, "Create list and add
+contacts" first calls `POST /zoho/lists` (the name plus one ticked email, since
+Zoho can't create an empty list), then `POST /zoho/lists/members` with the new
+`list_key`/`list_name` and all ticked emails. Invalid dates return 422. Errors: a
 non-2xx status with FastAPI-style `{"detail": "..."}` is shown to the user.
 
 ## Bitrix export: backend contract

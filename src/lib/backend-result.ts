@@ -25,6 +25,15 @@ export async function callApi<T = Record<string, unknown>>(
   } catch {
     throw new Error(`Unexpected response (${res.status})`);
   }
-  if (!result.ok) throw new Error(result.error);
+  if (!result.ok) throw new Error(withoutHtml(result.error));
   return result.data;
+}
+
+/** Some upstream services (e.g. Zoho) answer with an HTML error page; show
+ * what came before it instead of the markup. */
+function withoutHtml(message: string): string {
+  const start = message.search(/<[a-z!/]/i);
+  if (start < 0) return message;
+  const before = message.slice(0, start).trim().replace(/[:\s]+$/, "");
+  return `${before || "Request failed"} (the service returned an error page with no details)`;
 }
