@@ -28,8 +28,9 @@ async function callBackend(url: string, init: RequestInit, timeoutMs: number): P
       // Non-JSON body (e.g. an HTML error page); keep it as text.
     }
     if (!res.ok) {
-      const detail =
-        data && typeof data === "object" && "detail" in data ? (data as { detail: unknown }).detail : text;
+      // FastAPI's {"detail": ...}, or the Ad generator's {"success": false, "error": ...}.
+      const body = data && typeof data === "object" ? (data as { detail?: unknown; error?: unknown }) : {};
+      const detail = body.detail ?? body.error ?? text;
       return { ok: false, error: `${res.status}: ${typeof detail === "string" ? detail : JSON.stringify(detail)}` };
     }
     return { ok: true, data };

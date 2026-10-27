@@ -2,7 +2,8 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import {
-  Building2, Download, FileText, History, RefreshCw, Rocket, Send, SlidersHorizontal, Sparkles, X, Zap,
+  BarChart3, Building2, Download, FileText, History, Pause, RefreshCw, Rocket, Send, Settings2, SlidersHorizontal,
+  Sparkles, Users, Wallet, X, Zap,
 } from "lucide-react";
 import { callApi } from "@/lib/backend-result";
 import { createStore } from "@/lib/store";
@@ -540,6 +541,7 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
                 imageUrl={s.image.clean_image_url}
                 campaignName={`${companyName} - ${campaign.detected_event || "campaign"}`}
                 facebookMessage={s.captions.facebook ?? ""}
+                headline={campaign.ads?.image_headline ?? ""}
                 link={effectiveContactUrl()}
               />
             )}
@@ -1075,6 +1077,185 @@ function DraftSummary({ draft, statusText, ids, onActivate, onDiscard }: {
   );
 }
 
+/** GET /facebook-ad-config: the backend's active Meta ad settings (no secrets). */
+type MetaAdConfig = {
+  configured: boolean;
+  ad_account_id: string;
+  currency: string;
+  page_id: string;
+  instagram_user_id: string;
+  whatsapp_number: string;
+  objective: string;
+  budget_level: string;
+  bid_strategy: string;
+  special_ad_categories: string[];
+  destination_type: string;
+  optimization_goal: string;
+  cta_type: string;
+  countries: string[];
+  advantage_audience: boolean;
+  saved_audience_id: string;
+};
+/** One level (campaign / ad set / ad) of POST /facebook-ad-campaign-status. */
+type MetaLevelStatus = {
+  effective_status?: string;
+  issues_info?: { error_message?: string }[];
+  ad_review_feedback?: unknown;
+};
+/** POST /facebook-ad-insights: Meta's numbers come as strings; {} before any delivery. */
+type MetaInsights = {
+  spend?: string;
+  reach?: string;
+  impressions?: string;
+  clicks?: string;
+  actions?: { action_type: string; value: string }[];
+};
+
+/** An amount in the ad account's currency ("₹800.00", "$10.00"). */
+function moneyIn(n: number, currency: string) {
+  try {
+    return n.toLocaleString("en-US", { style: "currency", currency });
+  } catch {
+    return `${n.toFixed(2)} ${currency}`;
+  }
+}
+
+/** A Meta ads management call; the backend answers {success, data} (or {success: false, error}). */
+async function metaAds<T>(path: string, body?: Dict): Promise<T> {
+  const r = await callApi<{ success?: boolean; data?: T; error?: string }>("ad", path, body);
+  if (!r.success) throw new Error(r.error || `${path} failed`);
+  return r.data as T;
+}
+
+function MetaDraftPanel({ draft, onBudgetChanged, onDiscard }: {
+  draft: Draft;
+  onBudgetChanged: (dailyBudget: number) => void;
+  onDiscard: () => void;
+}) {
+  const currency = String(draft.currency || "USD");
+  const ids = { campaign_id: String(draft.campaign_id), adset_id: String(draft.adset_id), ad_id: String(draft.ad_id) };
+  const [password, setPassword] = useState("");
+  const [newBudget, setNewBudget] = useState(draft._daily_budget);
+  const [busy, setBusy] = useState<"status" | "results" | "pause" | "activate" | "budget" | null>(null);
+  const [notice, setNotice] = useState<Notice>(null);
+  const [status, setStatus] = useState<Record<string, MetaLevelStatus> | null>(null);
+  const [results, setResults] = useState<MetaInsights | null>(null);
+  const spend = draft._daily_budget * draft._days;
+
+  async function run(action: NonNullable<typeof busy>, fn: () => Promise<void>) {
+    setBusy(action);
+    setNotice(null);
+    try {
+      await fn();
+    } catch (e) {
+      setNotice({ kind: "error", text: (e as Error).message });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <Alert kind="success">Draft campaign created as PAUSED — not spending until you activate it.</Alert>
+      <p className="break-all font-mono text-xs text-muted">
+        Campaign {ids.campaign_id} / ad set {ids.adset_id} / ad {ids.ad_id}
+      </p>
+      <div className="max-w-xs">
+        <Metric label="Estimated total spend" value={moneyIn(spend, currency)}
+          hint={`${moneyIn(draft._daily_budget, currency)}/day x ${draft._days} days`} />
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Button icon={RefreshCw} loading={busy === "status"} disabled={busy !== null} onClick={() => run("status", async () => {
+          setStatus(await metaAds<Record<string, MetaLevelStatus>>("facebook-ad-campaign-status", ids));
+        })}>
+          Refresh status
+        </Button>
+        <Button icon={BarChart3} loading={busy === "results"} disabled={busy !== null} onClick={() => run("results", async () => {
+          setResults(await metaAds<MetaInsights>("facebook-ad-insights", { object_id: ids.campaign_id }));
+        })}>
+          Results so far
+        </Button>
+        <Button icon={Pause} loading={busy === "pause"} disabled={busy !== null} onClick={() => run("pause", async () => {
+          // No password: pausing only ever stops spend.
+          await metaAds("pause-facebook-ad-campaign", ids);
+          setNotice({ kind: "success", text: "Campaign paused — no further spend." });
+        })}>
+          Pause campaign
+        </Button>
+      </div>
+
+      {status && (
+        <div className="space-y-2 rounded-lg border border-line p-3 text-sm">
+          {(["campaign", "adset", "ad"] as const).map((level) => {
+            const info = status[level] ?? {};
+            return (
+              <div key={level} className="space-y-1">
+                <p><span className="font-semibold text-navy">{level === "adset" ? "Ad set" : level[0].toUpperCase() + level.slice(1)}:</span>{" "}
+                  {info.effective_status ?? "?"}</p>
+                {(info.issues_info ?? []).map((issue, i) => (
+                  <Alert key={i} kind="warning">{issue.error_message || JSON.stringify(issue)}</Alert>
+                ))}
+                {Boolean(info.ad_review_feedback) && (
+                  <Alert kind="warning">Review feedback: {JSON.stringify(info.ad_review_feedback)}</Alert>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {results && (
+        Object.keys(results).length ? (
+          <div className="space-y-2">
+            <div className="grid gap-3 sm:grid-cols-4">
+              <Metric label="Spend" value={moneyIn(Number(results.spend ?? 0), currency)} />
+              <Metric label="Reach" value={Number(results.reach ?? 0).toLocaleString("en-US")} />
+              <Metric label="Impressions" value={Number(results.impressions ?? 0).toLocaleString("en-US")} />
+              <Metric label="Clicks" value={Number(results.clicks ?? 0).toLocaleString("en-US")} />
+            </div>
+            {(results.actions ?? []).map((a) => (
+              <p key={a.action_type} className="text-xs text-muted">{a.action_type}: {a.value}</p>
+            ))}
+          </div>
+        ) : (
+          <Alert>No results yet — the campaign hasn&apos;t delivered.</Alert>
+        )
+      )}
+
+      <TextInput
+        type="password"
+        label="Execution password (required to activate or change the budget — this spends real money)"
+        value={password}
+        onChange={setPassword}
+      />
+      <div className="max-w-xs">
+        <NumberInput label={`New daily budget (${currency})`} min={1} value={newBudget} onChange={setNewBudget} />
+      </div>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Button variant="primary" icon={Rocket} loading={busy === "activate"} disabled={!password || busy !== null}
+          onClick={() => run("activate", async () => {
+            setNotice(await activate("activate-facebook-ad-campaign", { ...ids, password }));
+          })}>
+          Activate campaign
+        </Button>
+        <Button icon={Wallet} loading={busy === "budget"} disabled={!password || busy !== null}
+          onClick={() => run("budget", async () => {
+            await metaAds("update-facebook-ad-budget", {
+              campaign_id: ids.campaign_id, adset_id: ids.adset_id, daily_budget: newBudget, password,
+            });
+            onBudgetChanged(newBudget);
+            setNotice({ kind: "success", text: `Daily budget set to ${moneyIn(newBudget, currency)}.` });
+          })}>
+          Update budget
+        </Button>
+        <Button disabled={busy !== null} onClick={onDiscard}>Discard draft</Button>
+      </div>
+      <NoticeLine notice={notice} />
+    </div>
+  );
+}
+
 async function activate(path: string, body: Dict): Promise<Notice> {
   try {
     const r = await callApi<Dict>("ad", path, body);
@@ -1086,19 +1267,49 @@ async function activate(path: string, body: Dict): Promise<Notice> {
   }
 }
 
-function PaidPromotionCard({ imageUrl, campaignName, facebookMessage, link }: {
+function PaidPromotionCard({ imageUrl, campaignName, facebookMessage, headline, link }: {
   imageUrl: string;
   campaignName: string;
   facebookMessage: string;
+  headline: string;
   link: string;
 }) {
   const [s, set] = store.useStore();
   const [tab, setTab] = useState<"meta" | "linkedin">("meta");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
-  const [fb, setFb] = useState({ budget: 10, days: 7, countries: ["US"] });
+  // countries null = the backend's default (FACEBOOK_AD_COUNTRIES).
+  const [fb, setFb] = useState({ budget: 10, days: 7, countries: null as string[] | null, headline: headline.slice(0, 40) });
   const [li, setLi] = useState({ budget: 10, days: 7, country: "US" });
+  const [metaConfig, setMetaConfig] = useState<MetaAdConfig | null>(null);
+  const [metaConfigError, setMetaConfigError] = useState<string | null>(null);
+  const [estimating, setEstimating] = useState(false);
+  const [estimate, setEstimate] = useState<{ lower?: number | null; upper?: number | null } | null>(null);
   const countryCodes = Object.keys(AD_COUNTRIES);
+  const currency = metaConfig?.currency || "USD";
+  const fbCountries = fb.countries
+    ?? (metaConfig?.countries ?? ["US"]).filter((c) => c in AD_COUNTRIES);
+
+  // The Meta ad settings decide the budget currency and default countries.
+  useEffect(() => {
+    callApi<{ success?: boolean; data?: MetaAdConfig; error?: string }>("ad", "facebook-ad-config").then(
+      (r) => (r.success && r.data ? setMetaConfig(r.data) : setMetaConfigError(r.error || "unknown error")),
+      (e: Error) => setMetaConfigError(e.message),
+    );
+  }, []);
+
+  async function estimateAudience() {
+    setEstimating(true);
+    setEstimate(null);
+    setNotice(null);
+    try {
+      setEstimate(await metaAds("facebook-ad-audience-estimate", { countries: fbCountries }));
+    } catch (e) {
+      setNotice({ kind: "error", text: `Could not estimate the audience: ${(e as Error).message}` });
+    } finally {
+      setEstimating(false);
+    }
+  }
 
   async function createDraft(path: string, body: Dict, budget: number, days: number, key: "facebookAdDraft" | "linkedinAdDraft") {
     setBusy(true);
@@ -1122,44 +1333,76 @@ function PaidPromotionCard({ imageUrl, campaignName, facebookMessage, link }: {
       <Tabs tabs={[{ id: "meta", label: "Meta (Facebook/Instagram)" }, { id: "linkedin", label: "LinkedIn" }]} active={tab} onChange={setTab} />
       {tab === "meta" && (
         s.facebookAdDraft ? (
-          <DraftSummary
+          <MetaDraftPanel
             draft={s.facebookAdDraft}
-            statusText="Draft campaign created — status: PAUSED (not spending)."
-            ids={`Campaign ${s.facebookAdDraft.campaign_id} / ad set ${s.facebookAdDraft.adset_id} / ad ${s.facebookAdDraft.ad_id}`}
-            onActivate={(password) => activate("activate-facebook-ad-campaign", {
-              campaign_id: s.facebookAdDraft!.campaign_id,
-              adset_id: s.facebookAdDraft!.adset_id,
-              ad_id: s.facebookAdDraft!.ad_id,
-              password,
-            })}
+            onBudgetChanged={(dailyBudget) => set({ facebookAdDraft: { ...s.facebookAdDraft!, _daily_budget: dailyBudget } })}
             onDiscard={() => set({ facebookAdDraft: null })}
           />
         ) : (
           <div className="space-y-4">
+            {metaConfigError && <Alert kind="error">Could not load the Meta ad settings: {metaConfigError}</Alert>}
+            {metaConfig && !metaConfig.configured && (
+              <Alert kind="warning">
+                Meta ads aren&apos;t configured on the server: the Ad generator backend needs FACEBOOK_AD_ACCOUNT_ID and
+                FACEBOOK_MARKETING_ACCESS_TOKEN in its .env.
+              </Alert>
+            )}
+            {metaConfig && (
+              <Expander title="Active Meta ad settings (from the server)" icon={Settings2}>
+                <div className="space-y-1 text-sm text-muted">
+                  <p>Ad account <code>{metaConfig.ad_account_id || "-"}</code> ({metaConfig.currency}) · Page{" "}
+                    <code>{metaConfig.page_id || "-"}</code> · Instagram <code>{metaConfig.instagram_user_id || "-"}</code> ·
+                    WhatsApp <code>{metaConfig.whatsapp_number || "-"}</code></p>
+                  <p>Objective <code>{metaConfig.objective}</code> · destination <code>{metaConfig.destination_type}</code> ·
+                    goal <code>{metaConfig.optimization_goal}</code> · call to action <code>{metaConfig.cta_type}</code> ·
+                    budget on <code>{metaConfig.budget_level}</code> · bid <code>{metaConfig.bid_strategy}</code></p>
+                  <p>Special ad categories <code>{metaConfig.special_ad_categories.join(", ") || "none"}</code> ·
+                    Advantage+ audience <code>{metaConfig.advantage_audience ? "on" : "off"}</code> · saved audience{" "}
+                    <code>{metaConfig.saved_audience_id || "-"}</code></p>
+                </div>
+              </Expander>
+            )}
             <div className="grid gap-4 sm:grid-cols-2">
-              <NumberInput label="Daily budget (USD)" min={1} value={fb.budget} onChange={(budget) => setFb({ ...fb, budget })} />
+              <NumberInput label={`Daily budget (${currency})`} min={1} value={fb.budget} onChange={(budget) => setFb({ ...fb, budget })} />
               <NumberInput label="Run for how many days" min={1} value={fb.days} onChange={(days) => setFb({ ...fb, days })} />
             </div>
             <ChipSelect label="Countries to target" options={countryCodes} format={(c) => AD_COUNTRIES[c]}
-              selected={fb.countries} onChange={(countries) => setFb({ ...fb, countries })} />
-            <Button icon={FileText} loading={busy} disabled={!fb.countries.length} onClick={() => {
-              const start = new Date();
-              const end = new Date(start.getTime() + fb.days * 86_400_000);
-              // The format the backend expects: %Y-%m-%dT%H:%M:%S%z in UTC.
-              const fmt = (d: Date) => `${d.toISOString().slice(0, 19)}+0000`;
-              createDraft("create-facebook-ad-campaign", {
-                name: campaignName,
-                image_url: imageUrl,
-                message: facebookMessage,
-                link,
-                daily_budget_usd: fb.budget,
-                countries: fb.countries,
-                start_time: fmt(start),
-                end_time: fmt(end),
-              }, fb.budget, fb.days, "facebookAdDraft");
-            }}>
-              Create draft campaign
-            </Button>
+              selected={fbCountries} onChange={(countries) => {
+                setFb({ ...fb, countries });
+                setEstimate(null);
+              }} />
+            <TextInput label="Ad headline" value={fb.headline} maxLength={40}
+              hint="Shown under the image (up to 40 characters)." onChange={(headline) => setFb({ ...fb, headline })} />
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Button icon={Users} loading={estimating} disabled={!fbCountries.length || busy} onClick={estimateAudience}>
+                Estimate audience
+              </Button>
+              <Button variant="primary" icon={FileText} loading={busy} disabled={!fbCountries.length || estimating} onClick={() => {
+                const start = new Date();
+                const end = new Date(start.getTime() + fb.days * 86_400_000);
+                // The format the backend expects: %Y-%m-%dT%H:%M:%S%z in UTC.
+                const fmt = (d: Date) => `${d.toISOString().slice(0, 19)}+0000`;
+                createDraft("create-facebook-ad-campaign", {
+                  name: campaignName,
+                  image_url: imageUrl,
+                  message: facebookMessage,
+                  headline: fb.headline.trim(),
+                  link,
+                  // In the ad account's currency (the backend's FACEBOOK_AD_CURRENCY).
+                  daily_budget: fb.budget,
+                  countries: fbCountries,
+                  start_time: fmt(start),
+                  end_time: fmt(end),
+                }, fb.budget, fb.days, "facebookAdDraft");
+              }}>
+                Create draft campaign
+              </Button>
+            </div>
+            {estimate && (
+              <Alert>
+                Estimated audience: {(estimate.lower ?? 0).toLocaleString("en-US")} – {(estimate.upper ?? 0).toLocaleString("en-US")} people
+              </Alert>
+            )}
             <NoticeLine notice={notice} />
           </div>
         )

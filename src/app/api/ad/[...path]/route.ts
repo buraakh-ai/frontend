@@ -13,6 +13,13 @@ const POST_ENDPOINTS = new Set([
   "post-to-linkedin",
   "create-facebook-ad-campaign",
   "activate-facebook-ad-campaign",
+  // Managing a Meta draft/campaign: reach estimate, status, results, pause,
+  // and a budget change (password-gated by the backend, like activation).
+  "facebook-ad-audience-estimate",
+  "facebook-ad-campaign-status",
+  "facebook-ad-insights",
+  "pause-facebook-ad-campaign",
+  "update-facebook-ad-budget",
   "create-linkedin-ad-campaign",
   "activate-linkedin-ad-campaign",
 ]);
@@ -38,6 +45,10 @@ export async function POST(request: NextRequest, ctx: RouteContext<"/api/ad/[...
 
 export async function GET(_request: NextRequest, ctx: RouteContext<"/api/ad/[...path]">) {
   const segments = (await ctx.params).path;
+  // The active (non-secret) Meta ad settings from the backend's .env.
+  if (segments.join("/") === "facebook-ad-config") {
+    return proxyJson(`${adGeneratorBackendUrl()}/facebook-ad-config`, { method: "GET" }, 30_000);
+  }
   // Generated images, served by the backend under /static/.
   if (segments[0] === "static" && segments.length === 2) {
     return proxyFile(`${adGeneratorBackendUrl()}/static/${encodeURIComponent(segments[1])}`, 30_000);
