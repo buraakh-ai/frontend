@@ -93,6 +93,16 @@ function validateSemantics(config: LeadConfig): void {
   if (!Object.keys(run.provider_labels).length) {
     throw new Error("provider_labels must list at least one provider");
   }
+  const google = run.google_places;
+  if (!(google.max_requests.min <= google.max_requests.default && google.max_requests.default <= google.max_requests.max)) {
+    throw new Error("google_places.max_requests.default must be between min and max");
+  }
+  if (google.cost_per_request < 0 || google.requests_per_search_area < 1) {
+    throw new Error("google_places.cost_per_request and requests_per_search_area must be positive");
+  }
+  if (Object.values(run.provider_labels).includes(google.provider)) {
+    throw new Error("google_places is opt-in; its provider must not also be listed in provider_labels");
+  }
   const rangeKeys = [
     "source_count", "lead_count", "results_per_query", "max_pages_per_query",
     "enrichment_batch_size", "enrichment_concurrency",

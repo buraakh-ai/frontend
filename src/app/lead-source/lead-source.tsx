@@ -9,9 +9,9 @@ import {
   Alert, Button, Checkbox, Expander, MultiSelect, PageHeader, Select, Slider, TextInput, downloadText,
 } from "@/components/ui";
 import { estimateRun, estimateShape, recordRun, runHistory, type RunShape } from "./estimate";
-import { clock, formatDuration, formatUsd, num, type Row, type Usage } from "./format";
+import { clock, formatDuration, foundBy, formatUsd, num, type Row, type Usage } from "./format";
 import { RunProgress, type JobStatus } from "./run-progress";
-import { LeadTable, RunDetails, RunSummaryBanner } from "./run-results";
+import { GoogleNotice, LeadTable, RunDetails, RunSummaryBanner } from "./run-results";
 
 type Notice = { kind: "success" | "error" | "warning"; text: string };
 type Depth = "quick" | "standard" | "thorough";
@@ -59,6 +59,9 @@ function initialForm(config: LeadConfig) {
     depth: "standard" as Depth,
     findDecisionMakers: true,
     searchForEmails: true,
+    // Google Places is paid and opt-in: off until the person ticks it.
+    useGoogle: false,
+    googleMaxRequests: run.google_places.max_requests.default,
     // Businesses to check; null = derived from the lead count and depth.
     sourceOverride: null as number | null,
     resultsPerQuery: run.results_per_query.default,
@@ -180,7 +183,7 @@ function finishRun(status: JobStatus) {
   // A stopped run says nothing about how long a full one takes.
   if (job && !stopped) {
     const est = estimateShape(job.shape);
-    recordRun({ leads: leads.length, seconds, cost: num(usage?.total_cost_usd), estSeconds: est.seconds, estCost: est.cost });
+    recordRun({ leads: leads.length, seconds, cost: num(usage?.llm_cost_usd), estSeconds: est.seconds, estCost: est.cost });
   }
 }
 
@@ -285,7 +288,10 @@ export function LeadSource({ config, warning }: { config: LeadConfig; warning: s
   const searchedFor = [...targets.subcategories, ...targets.industries];
   const region = form.state || form.country;
   const name = campaignName(searchedFor, areas, region);
-  const providers = Object.values(runCfg.provider_labels);
+  const googleCfg = runCfg.google_places;
+  const baseProviders = Object.values(runCfg.provider_labels);
+  // Google Places is paid, so it is added only when the person ticks it.
+  const providers = form.useGoogle ? [...baseProviders, googleCfg.provider] : baseProviders;
 
   const depth = DEPTHS[form.depth];
   const autoSources = clamp(Math.ceil(form.leadCount * depth.factor), runCfg.source_count.min, runCfg.source_count.max);
@@ -293,9 +299,16 @@ export function LeadSource({ config, warning }: { config: LeadConfig; warning: s
   // Discovery searches: every provider for every city × kind of business.
   const searchCells = Math.max(areas.length, 1) * Math.max(searchedFor.length, 1);
   const plannedQueries = clamp(searchCells * providers.length, 1, 200);
+  // Google requests: about this many per city and kind of business, never more than the limit.
+  const googleRequests = form.useGoogle
+    ? Math.min(form.googleMaxRequests, searchCells * googleCfg.requests_per_search_area)
+    : 0;
+  const googleMaxCost = form.googleMaxRequests * googleCfg.cost_per_request;
   const shape: RunShape = {
     sources: sourceCount,
-    webQueries: plannedQueries * form.pagesPerQuery,
+    webQueries: clamp(searchCells * baseProviders.length, 1, 200) * form.pagesPerQuery,
+    googleRequests,
+    googleRequestCost: googleCfg.cost_per_request,
     resultsPerQuery: form.resultsPerQuery,
     batchSize: form.batchSize,
     concurrency: form.concurrency,
@@ -329,7 +342,7 @@ export function LeadSource({ config, warning }: { config: LeadConfig; warning: s
       source_count: sourceCount,
       lead_count: form.leadCount,
       discovery: {
-        // Every configured provider is always used.
+        // Every configured provider is always used; Google Places only when ticked.
         providers,
         // Discovery stops once it has found the businesses to check.
         oversampling_factor: 1,
@@ -340,6 +353,8 @@ export function LeadSource({ config, warning }: { config: LeadConfig; warning: s
         enrichment_concurrency: form.concurrency,
         find_decision_makers: form.findDecisionMakers,
         search_for_emails: form.searchForEmails,
+        // The most Google Places requests this run may spend (the server's own limit still applies).
+        google_max_requests: form.useGoogle ? form.googleMaxRequests : undefined,
       },
       // Leads are not saved automatically: a person reviews them and sends
       // them with "Export to Lead Hub".
@@ -526,6 +541,33 @@ export function LeadSource({ config, warning }: { config: LeadConfig; warning: s
                     one web search for addresses at the business&apos;s domain.
                   </p>
                 </div>
+                <div className="px-4 py-3">
+                  <Checkbox label="Also search Google Places (paid)" checked={form.useGoogle}
+                    onChange={(useGoogle) => setForm({ useGoogle })} />
+                  <p className="mt-1 pl-6.5 text-xs text-muted">
+                    Finds many more businesses, most with a website and phone number. <strong className="text-navy">Billing
+                    applies</strong>: about ${googleCfg.cost_per_request} per request (one page of up to 20 businesses).
+                    Google currently includes 1,000 free requests a month. Needs a Google Places key on the server.
+                  </p>
+                  {form.useGoogle && (
+                    <div className="mt-3 space-y-3 pl-6.5">
+                      <Slider label="Spending limit (Google requests)" min={googleCfg.max_requests.min} max={googleCfg.max_requests.max}
+                        value={form.googleMaxRequests} onChange={(googleMaxRequests) => setForm({ googleMaxRequests })}
+                        hint={`Up to ${formatUsd(googleMaxCost)}. The run stops using Google once it has made this many requests.`} />
+                      <Alert kind="warning">
+                        Expect about {googleRequests} Google requests (~{formatUsd(googleRequests * googleCfg.cost_per_request)}
+                        {" "}at list price). You will never be charged for more than {form.googleMaxRequests} requests
+                        ({formatUsd(googleMaxCost)}) on this run.
+                      </Alert>
+                      {!areas.length && (
+                        <Alert kind="info">
+                          Pick one or more cities for the best results. With a whole state, Google&apos;s map cells are very large
+                          and return few businesses.
+                        </Alert>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
 
               <Expander title="Advanced settings">
@@ -573,11 +615,12 @@ export function LeadSource({ config, warning }: { config: LeadConfig; warning: s
               <SummaryRow label="Businesses to check" value={sourceCount} />
               <SummaryRow label="Decision makers" value={form.findDecisionMakers ? "Yes" : "No"} />
               <SummaryRow label="Email web search" value={form.searchForEmails ? "Yes" : "No"} />
+              <SummaryRow label="Google Places" value={form.useGoogle ? `Yes · up to ${form.googleMaxRequests} requests` : "No"} />
             </dl>
             <div className="grid grid-cols-2 gap-px border-y border-line bg-line">
               <EstimateTile icon={Clock} label="Est. time" value={`~${formatDuration(estimate.seconds)}`} />
               <EstimateTile icon={Coins} label="Est. cost" value={`~${formatUsd(estimate.cost)}`}
-                hint={`~${formatUsd(estimate.cost / Math.max(form.leadCount, 1))} per lead`} />
+                hint={`~${formatUsd(estimate.cost / Math.max(form.leadCount, 1))} per lead${form.useGoogle ? ` · Google up to ${formatUsd(googleMaxCost)}` : ""}`} />
             </div>
             <div className="space-y-3 px-5 py-4">
               <Button variant="primary" icon={Play} block loading={starting} disabled={!!missing || running} onClick={startRun}>
@@ -611,6 +654,7 @@ export function LeadSource({ config, warning }: { config: LeadConfig; warning: s
           <>
             <RunSummaryBanner leads={results.leads} seconds={results.seconds} usage={results.usage} target={results.target}
               stopped={results.stopped} />
+            <GoogleNotice summary={results.summary} />
             {results.leads.length > 0 ? (
               <>
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -621,7 +665,7 @@ export function LeadSource({ config, warning }: { config: LeadConfig; warning: s
                   <div className="flex shrink-0 flex-wrap gap-3">
                     <Button icon={Download} onClick={() => downloadText(
                       `${results.name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "")}_leads.csv`,
-                      toCsv(results.leads), "text/csv",
+                      toCsv(results.leads.map((lead) => ({ ...lead, found_by: foundBy(lead) }))), "text/csv",
                     )}>
                       CSV
                     </Button>

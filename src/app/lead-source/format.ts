@@ -14,6 +14,7 @@ export type Usage = {
   directory_pages: number; // Yellow Pages / OpenStreetMap lookups (free)
   tavily_searches: number;
   brave_searches: number;
+  google_places_requests?: number; // Google Places requests (paid, opt-in)
   llm_cost_usd: number;
   api_cost_usd: number;
   total_cost_usd: number;
@@ -47,9 +48,27 @@ export function formatCount(v: number): string {
 }
 
 export const searchCalls = (u: Usage) =>
-  num(u.free_searches) + num(u.directory_pages) + paidSearches(u);
+  num(u.free_searches) + num(u.directory_pages) + paidSearches(u) + num(u.google_places_requests);
 
 /** Searches through APIs with a free monthly allowance (Tavily, Brave). */
 export const paidSearches = (u: Usage) => num(u.tavily_searches) + num(u.brave_searches);
+
+// Names of the backend's discovery sources, as shown to people.
+const SOURCE_LABELS: Record<string, string> = {
+  yellow_pages: "Yellow Pages",
+  openstreetmap: "OpenStreetMap",
+  web_search: "Public web",
+  chambers: "Chambers",
+  sulekha: "Sulekha",
+  google_places: "Google Places",
+};
+export const sourceLabel = (key: string): string =>
+  SOURCE_LABELS[key] ?? key.replaceAll("_", " ").replace(/^./, (c) => c.toUpperCase());
+
+/** The sources that found a business or lead, as display names (e.g. ["Yellow Pages", "Google Places"]). */
+export function foundBy(row: Record<string, unknown>): string[] {
+  const raw = row.found_by;
+  return Array.isArray(raw) ? raw.filter((k): k is string => typeof k === "string").map(sourceLabel) : [];
+}
 
 export const text = (v: unknown) => (v === null || v === undefined ? "" : String(v));

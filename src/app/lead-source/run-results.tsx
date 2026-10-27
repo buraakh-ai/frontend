@@ -1,8 +1,8 @@
 "use client";
 
 import { CheckCircle2, CircleStop, ExternalLink, Mail, Phone, UserRound } from "lucide-react";
-import { Checkbox, DataTable, Expander, JsonView } from "@/components/ui";
-import { formatCount, formatDuration, formatUsd, num, paidSearches, text, type Row, type Usage } from "./format";
+import { Alert, Checkbox, DataTable, Expander, JsonView } from "@/components/ui";
+import { formatCount, formatDuration, formatUsd, foundBy, num, paidSearches, text, type Row, type Usage } from "./format";
 
 /** Hero summary of a finished run: what it found, how long it took, what it cost. */
 export function RunSummaryBanner({ leads, seconds, usage, target, stopped }: {
@@ -124,6 +124,36 @@ function linkedinUrl(lead: Row): string | null {
   return null;
 }
 
+/** Says so, in plain view, when Google Places was asked for but had a problem. */
+export function GoogleNotice({ summary }: { summary: Row | null }) {
+  const d = (summary?.discovery_metrics ?? {}) as Row;
+  const failed = num(((d.provider_errors ?? {}) as Record<string, number>).google_places);
+  const reason = ((d.provider_error_samples ?? {}) as Record<string, string>).google_places;
+  if (!failed) return null;
+  return (
+    <Alert kind="warning">
+      Google Places had a problem on this run ({failed} {failed === 1 ? "search" : "searches"} failed
+      {reason ? `: ${reason}` : ""}). Failed searches are not counted in the cost shown. Try the run again.
+    </Alert>
+  );
+}
+
+/** Which sources found a business; Google Places stands out because it is the paid one. */
+function SourceBadges({ row }: { row: Record<string, unknown> }) {
+  const names = foundBy(row);
+  if (!names.length) return <span className="text-muted">—</span>;
+  return (
+    <div className="flex flex-wrap gap-1">
+      {names.map((name) => (
+        <span key={name} className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+          name === "Google Places" ? "bg-accent/10 text-accent" : "bg-canvas text-navy"}`}>
+          {name}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 /** The qualified leads, each with a tick box for the Lead Hub export. */
 export function LeadTable({ leads, selected, exported, onSelectedChange }: {
   leads: Row[];
@@ -146,6 +176,7 @@ export function LeadTable({ leads, selected, exported, onSelectedChange }: {
             <tr className="text-xs font-bold uppercase tracking-wide text-muted">
               <th className="w-10 px-4 py-2.5" aria-label="Select" />
               <th className="px-3 py-2.5">Business</th>
+              <th className="px-3 py-2.5">Found by</th>
               <th className="px-3 py-2.5">Contact</th>
               <th className="px-3 py-2.5">Decision maker</th>
               <th className="px-3 py-2.5">Score</th>
@@ -176,6 +207,7 @@ export function LeadTable({ leads, selected, exported, onSelectedChange }: {
                       </a>
                     )}
                   </td>
+                  <td className="px-3 py-3"><SourceBadges row={lead} /></td>
                   <td className="px-3 py-3 text-xs">
                     {lead.phone ? <div className="flex items-center gap-1.5 text-ink"><Phone className="size-3 text-muted" />{text(lead.phone)}</div> : null}
                     {email ? <a href={`mailto:${email}`} className={`${link} mt-1`}><Mail className="size-3" />{email}</a> : null}
@@ -222,6 +254,8 @@ export function RunDetails({ summary, sources, usage, leads }: { summary: Row | 
   const d = (summary?.discovery_metrics ?? {}) as Row;
   const providerCounts = (d.provider_counts ?? {}) as Record<string, number>;
   const errors = (d.provider_errors ?? {}) as Record<string, number>;
+  const samples = (d.provider_error_samples ?? {}) as Record<string, string>;
+  const stoppedByLimit = (d.stopped_by_limit ?? {}) as Record<string, number>;
   const funnel: [string, number][] = [
     ["Search results read", num(d.raw_candidates)],
     ["Unique businesses", num(d.unique_candidates)],
@@ -255,9 +289,15 @@ export function RunDetails({ summary, sources, usage, leads }: { summary: Row | 
               ))}
               {!Object.keys(providerCounts).length && <span className="text-xs text-muted">—</span>}
             </div>
+            {num(stoppedByLimit.google_places) > 0 && (
+              <p className="mt-3 text-xs text-warning">
+                Google Places stopped at your request limit. Raise the spending limit to search the rest of the area.
+              </p>
+            )}
             {Object.keys(errors).length > 0 && (
               <p className="mt-3 text-xs text-warning">
                 Some searches failed: {Object.entries(errors).map(([p, n]) => `${p.replaceAll("_", " ")} (${n})`).join(", ")}.
+                {Object.entries(samples).map(([p, why]) => ` ${p.replaceAll("_", " ")}: ${why}`).join("")}
               </p>
             )}
           </div>
@@ -273,6 +313,7 @@ export function RunDetails({ summary, sources, usage, leads }: { summary: Row | 
                   ["Free web searches", num(usage.free_searches)],
                   ["Directory lookups (free)", num(usage.directory_pages)],
                   ["Free-tier API searches (Tavily, Brave)", paidSearches(usage)],
+                  ...(num(usage.google_places_requests) > 0 ? [["Google Places requests (paid)", num(usage.google_places_requests)] as const] : []),
                   ["Search cost", formatUsd(num(usage.api_cost_usd))],
                   ["Total", formatUsd(num(usage.total_cost_usd))],
                 ] as const).map(([k, v]) => (
@@ -289,8 +330,8 @@ export function RunDetails({ summary, sources, usage, leads }: { summary: Row | 
         </div>
       </Expander>
       <Expander title={`Discovered businesses (${sources.length})`}>
-        <DataTable rows={sources}
-          columns={["source_name", "source_type", "category", "city", "public_phone", "url", "rating", "review_count"]} />
+        <DataTable rows={sources.map((s) => ({ ...s, found_by: foundBy(s).join(" + ") }))}
+          columns={["source_name", "found_by", "category", "city", "public_phone", "url", "rating", "review_count"]} />
       </Expander>
       <Expander title="Why each lead may need AGFinTax (marketing notes and evidence)">
         <div className="space-y-4 text-sm">

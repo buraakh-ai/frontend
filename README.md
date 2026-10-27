@@ -184,6 +184,15 @@ through the source's own backend (which is configured with `LEAD_HUB_API_URL`):
   A run in progress keeps being watched while the person is on other pages.
   The pre-run time/cost estimate (`src/app/lead-source/estimate.ts`) mirrors the
   backend's list prices by hand and is calibrated by this browser's past runs.
+- Lead Finder: "Also search Google Places (paid)" is off by default. Ticked, the
+  run adds `google_places` to `discovery.providers` and sends
+  `discovery.google_max_requests` (the spending limit, 10 to 100 requests; the
+  backend's `GOOGLE_PLACES_MAX_REQUESTS_PER_RUN` is the ceiling and the backend
+  needs `GOOGLE_PLACES_API_KEY`). The estimate adds about
+  `requests_per_search_area` requests per city and kind of business × `cost_per_request`
+  (both in `src/config/lead-source.json`, `run_controls.google_places`, mirrored by
+  hand from the backend). The run summary reports `usage.google_places_requests`
+  and `discovery_metrics.stopped_by_limit`.
 - Lead Finder: runs are not saved automatically (`persist_to_database: false`);
   "Export to Lead Hub" sends the selected leads to the Lead source backend's
   `POST /export-to-lead-hub` (`{campaign, run_summary, leads}` from the run's

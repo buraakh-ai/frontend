@@ -11,13 +11,17 @@ export type RunShape = {
   concurrency: number;
   findDecisionMakers: boolean;
   searchForEmails?: boolean;
+  // Google Places (opt-in, paid): expected requests and the price of one.
+  googleRequests?: number;
+  googleRequestCost?: number;
 };
 export type RunRecord = { leads: number; seconds: number; cost: number; estSeconds: number; estCost: number; at: number };
 export type Estimate = { seconds: number; cost: number; fromHistory: number };
 
 // List prices; keep in sync by hand with the backend's settings (usage.py).
 // Web searches and directory pages are free (SearXNG, DDGS, Yellow Pages,
-// OpenStreetMap); only the AI model costs money.
+// OpenStreetMap); the AI model costs money, and so do Google Places requests
+// when that option is on (estimated separately, see googleCost).
 // Measured on test runs (gpt-4o-mini, evidence-first enrichment):
 const AI_PER_BUSINESS = 0.0002; // ~900 tokens each
 const DISCOVERY_SECONDS = 12; // per chunk of parallel discovery searches
@@ -32,6 +36,12 @@ export function estimateShape(shape: RunShape): { seconds: number; cost: number 
 
   const cost = shape.sources * AI_PER_BUSINESS;
   return { seconds, cost };
+}
+
+/** Expected Google Places spend: requests × price. Estimated apart from the AI
+ *  cost because it is capped by the run's own request limit, not by past runs. */
+export function googleCost(shape: RunShape): number {
+  return (shape.googleRequests ?? 0) * (shape.googleRequestCost ?? 0);
 }
 
 const KEY = "leadFinder.runHistory.v2";
@@ -81,9 +91,10 @@ const clamp = (v: number) => Math.min(3, Math.max(0.33, v));
 
 export function estimateRun(shape: RunShape, history: RunRecord[]): Estimate {
   const base = estimateShape(shape);
-  if (!history.length) return { ...base, fromHistory: 0 };
+  const google = googleCost(shape);
+  if (!history.length) return { ...base, cost: base.cost + google, fromHistory: 0 };
   const timeScale = clamp(median(history.map((r) => r.seconds / r.estSeconds)));
   const costRuns = history.filter((r) => r.estCost > 0);
   const costScale = costRuns.length ? clamp(median(costRuns.map((r) => r.cost / r.estCost))) : 1;
-  return { seconds: base.seconds * timeScale, cost: base.cost * costScale, fromHistory: history.length };
+  return { seconds: base.seconds * timeScale, cost: base.cost * costScale + google, fromHistory: history.length };
 }
