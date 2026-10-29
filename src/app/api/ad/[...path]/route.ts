@@ -6,6 +6,9 @@ import { notFound, proxyFile, proxyJson } from "@/lib/server/proxy";
 const POST_ENDPOINTS = new Set([
   "generate",
   "generate-image",
+  // Templated flyers: the sample layout (no AI) and the real generation.
+  "flyer-sample",
+  "generate-flyer",
   "retry-event",
   "switch-image-provider",
   "post-to-instagram",
@@ -48,6 +51,13 @@ export async function GET(_request: NextRequest, ctx: RouteContext<"/api/ad/[...
   // The active (non-secret) Meta ad settings from the backend's .env.
   if (segments.join("/") === "facebook-ad-config") {
     return proxyJson(`${adGeneratorBackendUrl()}/facebook-ad-config`, { method: "GET" }, 30_000);
+  }
+  // Flyer templates (fields and saved assets), and the saved assets themselves.
+  if (segments.join("/") === "flyer-templates") {
+    return proxyJson(`${adGeneratorBackendUrl()}/flyer-templates`, { method: "GET" }, 30_000);
+  }
+  if (segments[0] === "flyer-assets" && segments.length === 2) {
+    return proxyFile(`${adGeneratorBackendUrl()}/flyer-assets/${encodeURIComponent(segments[1])}`, 30_000);
   }
   // Generated images, served by the backend under /static/.
   if (segments[0] === "static" && segments.length === 2) {

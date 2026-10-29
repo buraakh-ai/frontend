@@ -2,14 +2,18 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import {
-  BarChart3, Building2, Download, FileText, History, Pause, RefreshCw, Rocket, Send, Settings2, SlidersHorizontal,
-  Sparkles, Users, Wallet, X, Zap,
+  BarChart3, Building2, ChevronDown, FileText, Pause, RefreshCw, Rocket, Send, Settings2, Users, Wallet, X, Zap,
 } from "lucide-react";
 import { callApi } from "@/lib/backend-result";
 import { createStore } from "@/lib/store";
 import { zip } from "@/lib/zip";
 import {
-  Alert, Button, Card, Checkbox, ChipSelect, DataTable, Expander, Metric, NumberInput, PageHeader, Select,
+  EMPTY_FLYER, FieldGrid, FlyerCard, FlyerPreviewCard, TemplatePicker, detailFields, fieldError, fieldsFor,
+  flyerErrors, flyerFields, flyerKey, imageName,
+  type AdImage, type FlyerConfig, type FlyerField, type FlyerState, type FlyerTemplateId, type ProviderFailed,
+} from "./flyer-studio";
+import {
+  Alert, Button, Card, ChipSelect, DataTable, Expander, Metric, NumberInput, PageHeader, Select,
   Stepper, Tabs, TextArea, TextInput, downloadBlob, downloadText,
 } from "@/components/ui";
 
@@ -41,14 +45,16 @@ type Campaign = Dict & {
   quality_score?: number;
   quality_reason?: string;
   website_url?: string;
+  // The flyer template the captions were written for (set by this page).
+  _template?: FlyerTemplateId;
 };
-type AdImage = { clean_image_url: string; provider?: string; prompt?: string };
-type ProviderFailed = { failed_provider: string; next_provider_label: string; next_provider_name: string };
 type Draft = Dict & { _daily_budget: number; _days: number };
 type TabId = "generate" | "review" | "publish";
 type Notice = { kind: "success" | "error" | "warning"; text: string } | null;
 type Form = { companyUrl: string; companyName: string; productDescription: string; adIdea: string; eventContext: string; contactUrl: string };
-type Brand = { tone: string; audience: string; colors: string[] };
+// details: the flyers' speaker/contact text (speaker_name, contact_email, ...);
+// an empty or missing value means the template's approved default.
+type Brand = { tone: string; audience: string; colors: string[]; details?: Record<string, string> };
 type SavedDraft = {
   id: string;
   savedAt: number;
@@ -57,6 +63,8 @@ type SavedDraft = {
   campaign: Campaign | null;
   captions: Record<string, string>;
   image: AdImage | null;
+  // Flyer template and per-template inputs; kept even before an image exists.
+  flyer?: FlyerState;
 };
 
 const EVENT_SUGGESTIONS = ["Interest rates", "Year-end planning", "Tax deadlines"];
@@ -91,8 +99,53 @@ function writeLocal(key: string, value: unknown) {
   }
 }
 
+/** Prefills the Generic template's headline from the campaign's. */
+function withGenericTopic(flyer: FlyerState, c: Campaign | null): FlyerState {
+  const topic = c?.ads?.image_headline;
+  if (!topic) return flyer;
+  return { ...flyer, values: { ...flyer.values, generic: { ...flyer.values.generic, topic } } };
+}
+
+/** The selected template's inputs plus the Brand profile's speaker/contact text. */
+function flyerInputs(flyer: FlyerState, brand: Brand): Record<string, string> {
+  const details = Object.fromEntries(Object.entries(brand.details ?? {}).filter(([, v]) => v.trim()));
+  return { ...flyer.values[flyer.template], ...details };
+}
+
+function formatWhen(date: string, time: string, zone: string) {
+  const day = new Date(`${date}T00:00`).toLocaleDateString("en-US",
+    { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+  const [h, m] = time.split(":").map(Number);
+  const clock = `${h % 12 || 12}${m ? `:${String(m).padStart(2, "0")}` : ""} ${h < 12 ? "AM" : "PM"}`;
+  return `${day}, ${clock} ${zone}`;
+}
+
+/** What the caption writer gets for the selected template. Service and
+ * Webinar pass their own topic as the event, so no trending event is picked,
+ * and the captions mention the same date and link as the flyer. */
+function campaignBrief(config: FlyerConfig | null, flyer: FlyerState, brand: Brand, form: Form) {
+  const t = flyer.template;
+  if (!config || t === "generic") return { ad_idea: form.adIdea, event_context: form.eventContext };
+  const v = flyerFields(config, t, flyerInputs(flyer, brand));
+  const extra = (v.message || v.description || "").replace(/\s+/g, " ").trim();
+  if (t === "service") {
+    return {
+      ad_idea: `Service promotion: ${v.topic}. ${extra} Call to action link: ${v.qr_url}`,
+      event_context: `Service promotion: ${v.topic}`,
+    };
+  }
+  const zone = config.timezones.find((z) => z.key === v.timezone)?.label ?? v.timezone;
+  const when = formatWhen(v.date, v.time, zone);
+  return {
+    ad_idea: `Free live webinar: "${v.topic}". ${extra} When: ${when}. Speaker: ${v.speaker_name}, ${v.speaker_title}. `
+      + `Registration link: ${v.qr_url}`,
+    event_context: `Free live webinar on ${when}: ${v.topic}`,
+  };
+}
+
 const draftTitle = (d: SavedDraft) =>
-  d.campaign?.ads?.image_headline || d.form.adIdea || d.form.companyName || "Untitled draft";
+  d.campaign?.ads?.image_headline || (d.flyer && d.flyer.template !== "generic" && d.flyer.values[d.flyer.template].topic)
+  || d.form.adIdea || d.form.companyName || "Untitled draft";
 const draftEvent = (d: SavedDraft) => d.campaign?.detected_event || d.form.eventContext || "Not generated yet";
 
 const store = createStore({
@@ -106,11 +159,30 @@ const store = createStore({
   campaign: null as Campaign | null,
   captions: {} as Record<string, string>,
   image: null as AdImage | null,
+  flyer: EMPTY_FLYER as FlyerState,
   providerFailed: null as ProviderFailed | null,
   linkedinPostUrn: null as string | null,
   facebookAdDraft: null as Draft | null,
   linkedinAdDraft: null as Draft | null,
 });
+
+// Upserts the current brief/campaign as the active draft.
+function saveDraft() {
+  const st = store.get();
+  const draft: SavedDraft = {
+    id: st.draftId ?? crypto.randomUUID(),
+    savedAt: Date.now(),
+    form: st.form,
+    platforms: st.platforms,
+    campaign: st.campaign,
+    captions: st.captions,
+    image: st.image,
+    flyer: st.flyer,
+  };
+  const drafts = [draft, ...st.drafts.filter((d) => d.id !== draft.id)].slice(0, MAX_DRAFTS);
+  writeLocal(LS_DRAFTS, drafts);
+  store.set({ drafts, draftId: draft.id });
+}
 
 const scoreColor = (s: number) => (s >= 8 ? "text-success" : s >= 5 ? "text-warning" : "text-danger");
 const money = (n: number) => `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -136,27 +208,21 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
         initialized: true,
         form: { ...st.form, ...defaults },
         drafts: readLocal<SavedDraft[]>(LS_DRAFTS, []),
-        brand: readLocal<Brand>(LS_BRAND, DEFAULT_BRAND),
+        brand: { ...DEFAULT_BRAND, ...readLocal<Partial<Brand>>(LS_BRAND, {}) },
       }));
     }
   }, [defaults]);
 
-  // Upserts the current brief/campaign as the active draft.
-  function saveDraft() {
-    const st = store.get();
-    const draft: SavedDraft = {
-      id: st.draftId ?? crypto.randomUUID(),
-      savedAt: Date.now(),
-      form: st.form,
-      platforms: st.platforms,
-      campaign: st.campaign,
-      captions: st.captions,
-      image: st.image,
-    };
-    const drafts = [draft, ...st.drafts.filter((d) => d.id !== draft.id)].slice(0, MAX_DRAFTS);
-    writeLocal(LS_DRAFTS, drafts);
-    store.set({ drafts, draftId: draft.id });
-  }
+  // The flyer templates (fields, saved assets) come from the backend.
+  const [flyerConfig, setFlyerConfig] = useState<FlyerConfig | null>(null);
+  const [flyerConfigError, setFlyerConfigError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  useEffect(() => {
+    callApi<FlyerConfig & { success?: boolean; error?: string }>("ad", "flyer-templates").then(
+      (r) => (r.success ? setFlyerConfig(r) : setFlyerConfigError(r.error || "unknown error")),
+      (e: Error) => setFlyerConfigError(e.message),
+    );
+  }, []);
 
   function loadDraft(d: SavedDraft) {
     set({
@@ -165,11 +231,13 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
       campaign: d.campaign,
       captions: d.captions,
       image: d.image,
+      flyer: d.flyer ?? withGenericTopic(EMPTY_FLYER, d.campaign),
       providerFailed: null,
       draftId: d.id,
       tab: d.campaign ? "review" : "generate",
     });
     setNotices({});
+    setFieldErrors({});
   }
 
   function deleteDraft(id: string) {
@@ -183,12 +251,16 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
     set({ brand });
   }
 
-  const { form, campaign } = s;
+  const { form, campaign, flyer } = s;
+  const template = flyer.template;
+  const inputs = flyerInputs(flyer, s.brand);
   const setForm = (patch: Partial<typeof form>) => set((st) => ({ form: { ...st.form, ...patch } }));
   const details = campaign?.company_details ?? {};
   const companyName = campaign?.detected_company_name ?? form.companyName;
+  // Service and Webinar have one link, used for the QR and the captions.
   const effectiveContactUrl = (c: Campaign | null = campaign) =>
-    form.contactUrl.trim() || form.companyUrl.trim() || String(c?.website_url ?? "").trim();
+    (template !== "generic" && flyerConfig ? flyerFields(flyerConfig, template, inputs).qr_url : "")
+    || form.contactUrl.trim() || form.companyUrl.trim() || String(c?.website_url ?? "").trim();
 
   async function run(key: string, fn: () => Promise<void>) {
     setBusy(key);
@@ -199,53 +271,92 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
     }
   }
 
-  async function generateImage(c: Campaign, customPrompt = "") {
-    const { brand } = store.get();
+  const setFlyerValue = (key: string, value: string) => {
+    set((st) => {
+      const t = st.flyer.template;
+      return { flyer: { ...st.flyer, values: { ...st.flyer.values, [t]: { ...st.flyer.values[t], [key]: value } } } };
+    });
+    setFieldErrors((errors) => Object.fromEntries(Object.entries(errors).filter(([k]) => k !== key)));
+  };
+
+  async function generateFlyer() {
+    const { brand, flyer: f, campaign: c } = store.get();
+    if (!flyerConfig || !c) return;
+    const t = f.template;
+    const values = flyerInputs(f, brand);
+    const errors = flyerErrors(flyerConfig, t, values);
+    setFieldErrors(errors);
+    if (Object.keys(errors).length) {
+      const inBrand = detailFields(flyerConfig).some((d) => errors[d.key]);
+      notify("image", { kind: "error", text: inBrand
+        ? "Check the speaker and contact details in the Brand profile (Brief step)."
+        : "Some details need fixing first." });
+      return;
+    }
+    notify("image", null);
     const cDetails = c.company_details ?? {};
-    const cAds = c.ads ?? {};
+    const inputsKey = flyerKey(flyerConfig, t, values);
     try {
-      const data = await callApi<Dict>("ad", "generate-image", {
-        company_name: c.detected_company_name ?? form.companyName,
-        instagram_copy: cAds.instagram ?? "",
-        image_headline: cAds.image_headline ?? "",
-        event_context: c.detected_event ?? "",
-        company_details: {
-          ...cDetails,
-          brand_tone: brand.tone || cDetails.brand_tone,
-          target_audience: brand.audience || cDetails.target_audience,
+      const data = await callApi<Dict>("ad", "generate-flyer", {
+        template: t,
+        fields: flyerFields(flyerConfig, t, values),
+        // Context for the Generic template's existing topic flow.
+        campaign: {
+          company_name: c.detected_company_name ?? form.companyName,
+          instagram_copy: c.ads?.instagram ?? "",
+          image_headline: c.ads?.image_headline ?? "",
+          event_context: c.detected_event ?? "",
+          company_details: {
+            ...cDetails,
+            brand_tone: brand.tone || cDetails.brand_tone,
+            target_audience: brand.audience || cDetails.target_audience,
+          },
         },
-        logo_url: cDetails.logo_url,
-        custom_prompt: customPrompt,
-        contact_url: effectiveContactUrl(c),
       });
       if (data.success && typeof data.clean_image_url === "string") {
-        set({ image: data as unknown as AdImage, providerFailed: null });
-        notify("image", null);
+        set({
+          image: {
+            clean_image_url: data.clean_image_url,
+            provider: data.provider as string | undefined,
+            prompt: data.prompt as string | undefined,
+            template: t,
+            inputsKey,
+          },
+          providerFailed: null,
+        });
         saveDraft();
-      } else if (data.success) {
-        notify("image", { kind: "error", text: "The backend reported success but returned no image." });
+      } else if (data.field_errors) {
+        setFieldErrors(data.field_errors as Record<string, string>);
+        notify("image", { kind: "error", text: "Some details need fixing first." });
       } else if (data.provider_failed) {
         set({ providerFailed: data as unknown as ProviderFailed });
       } else {
         set({ providerFailed: null });
-        notify("image", { kind: "error", text: `Image error: ${data.error}` });
+        notify("image", { kind: "error", text: `Flyer error: ${data.error}` });
       }
     } catch (e) {
-      notify("image", { kind: "error", text: `Something went wrong generating the image: ${(e as Error).message}` });
+      notify("image", { kind: "error", text: `Something went wrong generating the flyer: ${(e as Error).message}` });
     }
   }
 
-  const setCampaign = (data: Campaign) =>
-    set({ campaign: data, image: null, captions: { ...(data.ads ?? {}) } });
+  const setCampaign = (data: Campaign, t: FlyerTemplateId) =>
+    set((st) => ({
+      campaign: { ...data, _template: t },
+      image: null,
+      captions: { ...(data.ads ?? {}) },
+      flyer: withGenericTopic(st.flyer, data),
+    }));
 
-  const requestCampaign = (eventContext: string) =>
-    callApi<Campaign>("ad", "generate", {
+  const requestCampaign = (eventOverride?: string) => {
+    const brief = campaignBrief(flyerConfig, flyer, s.brand, form);
+    return callApi<Campaign>("ad", "generate", {
       company_name: form.companyName,
       product_description: form.productDescription,
-      ad_idea: form.adIdea,
-      event_context: eventContext || null,
+      ad_idea: brief.ad_idea,
+      event_context: (eventOverride ?? brief.event_context) || null,
       company_url: form.companyUrl || null,
     });
+  };
 
   const setCaption = (key: string, text: string) => {
     set((st) => ({ captions: { ...st.captions, [key]: text } }));
@@ -258,7 +369,7 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
     run(`rewrite-${key}`, async () => {
       notify("captions", null);
       try {
-        const data = await requestCampaign(campaign?.detected_event || form.eventContext);
+        const data = await requestCampaign(campaign?.detected_event || undefined);
         const text = data.success ? data.ads?.[key] : undefined;
         if (text) setCaption(key, text);
         else notify("captions", { kind: "error", text: `Could not rewrite the caption: ${data.error ?? "no caption returned"}` });
@@ -267,20 +378,32 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
       }
     });
 
+  const [companyOpen, setCompanyOpen] = useState(false);
+  const briefFields = flyerConfig ? fieldsFor(flyerConfig, template, "brief") : [];
+
   const onGenerate = () =>
     run("generate", async () => {
       if (!form.companyName.trim()) {
-        notify("generate", { kind: "error", text: "Please enter the company name." });
+        setCompanyOpen(true);
+        notify("generate", { kind: "error", text: "Please enter the company name under Company." });
         return;
       }
       if (!s.platforms.length) {
         notify("generate", { kind: "error", text: "Pick at least one platform." });
         return;
       }
+      if (flyerConfig) {
+        const errors = flyerErrors(flyerConfig, template, inputs, briefFields);
+        setFieldErrors(errors);
+        if (Object.keys(errors).length) {
+          notify("generate", { kind: "error", text: "Fill in the highlighted fields first." });
+          return;
+        }
+      }
       notify("generate", null);
       let data: Campaign;
       try {
-        data = await requestCampaign(form.eventContext);
+        data = await requestCampaign();
       } catch (e) {
         notify("generate", { kind: "error", text: `Something went wrong talking to the backend: ${(e as Error).message}` });
         return;
@@ -288,15 +411,26 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
       if (data.exhausted) {
         notify("generate", { kind: "error", text: `All text generation providers are exhausted: ${data.error}` });
       } else if (data.success) {
-        setCampaign(data);
+        setCampaign(data, template);
         set({ tab: "review" });
         saveDraft();
-        setBusy("generate-image");
-        await generateImage(data);
       } else {
         notify("generate", { kind: "error", text: `Error: ${data.error}` });
       }
     });
+
+  // The generated flyer, only while it still matches the selected template
+  // and its inputs; publishing and downloading use nothing else.
+  const readyImage = s.image && flyerConfig && s.image.template === template
+    && s.image.inputsKey === flyerKey(flyerConfig, template, inputs)
+    ? s.image : null;
+  // Captions are written for one template; switching after that needs a rerun.
+  const captionsMismatch = !!campaign?._template && campaign._template !== template && flyerConfig
+    ? `The captions were written for the ${flyerConfig.templates[campaign._template].label} template. `
+      + "Generate the campaign again from the Brief to match the selected template."
+    : null;
+  // The Generic sample shows the ad idea until the AI writes a headline.
+  const previewValues = template === "generic" && !inputs.topic?.trim() ? { ...inputs, topic: form.adIdea } : inputs;
 
   return (
     <>
@@ -306,11 +440,11 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
           title={campaign.ads?.image_headline || companyName}
           subtitle={s.tab === "review"
             ? `${companyName} · Draft saved automatically`
-            : "Generate the ad image, then publish or download."}
+            : "Generate the flyer, then publish or download."}
           actions={s.tab === "review" ? (
             <>
               <Button onClick={() => set({ tab: "generate" })}>Edit brief</Button>
-              <Button variant="primary" onClick={() => set({ tab: "publish" })}>Continue to image</Button>
+              <Button variant="primary" onClick={() => set({ tab: "publish" })}>Continue to flyer</Button>
             </>
           ) : (
             <Button onClick={() => set({ tab: "review" })}>Back to copy</Button>
@@ -320,22 +454,22 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
         <PageHeader
           eyebrow="Create"
           title="Ad Studio"
-          subtitle="Research a company, tie the campaign to a real event, and generate ad copy and images."
+          subtitle="Pick what you're creating, fill in the details, and get captions and a flyer."
         />
       )}
       <Stepper
         steps={[
           { id: "generate", label: "Brief" },
           { id: "review", label: "Review copy", disabled: !campaign },
-          { id: "publish", label: "Image & publish", disabled: !campaign },
+          { id: "publish", label: "Flyer & publish", disabled: !campaign },
         ]}
         active={s.tab}
         onChange={(tab) => set({ tab })}
       />
 
       {s.tab === "generate" && (
-        <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
-          <Card title="Campaign brief" subtitle="Only the company name is required. Everything else sharpens the result.">
+        <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+          <Card title="Campaign brief" subtitle="Pick what you're creating, then fill in the details.">
             <form
               className="space-y-5"
               onSubmit={(e) => {
@@ -343,34 +477,52 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
                 onGenerate();
               }}
             >
-              <div className="grid gap-4 md:grid-cols-2">
-                <TextInput label="Company website" placeholder="https://www.agfintax.com/"
-                  value={form.companyUrl} onChange={(v) => setForm({ companyUrl: v })} />
-                <TextInput label="Company name *" placeholder="AGFinTax"
-                  value={form.companyName} onChange={(v) => setForm({ companyName: v })} />
-              </div>
-              <TextArea label="What does the company do?" placeholder="Auto-filled from the website if left blank"
-                value={form.productDescription} onChange={(v) => setForm({ productDescription: v })} />
-              <div className="grid gap-4 md:grid-cols-2">
-                <TextArea label="Ad idea or angle" placeholder="e.g. Year-end tax moves for small business owners"
-                  value={form.adIdea} onChange={(v) => setForm({ adIdea: v })} />
-                <div className="space-y-2.5">
-                  <TextInput label="Current event to connect to" placeholder="Leave blank and AI picks a trending event"
-                    value={form.eventContext} onChange={(v) => setForm({ eventContext: v })} />
-                  <div className="flex flex-wrap gap-2">
-                    {EVENT_SUGGESTIONS.map((ev) => (
-                      <button key={ev} type="button" onClick={() => setForm({ eventContext: ev })}
-                        className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
-                          form.eventContext === ev
-                            ? "border-accent/40 bg-accent/10 text-accent"
-                            : "border-line bg-canvas text-navy hover:border-navy/30"
-                        }`}>
-                        {ev}
-                      </button>
-                    ))}
+              {flyerConfig ? (
+                <TemplatePicker config={flyerConfig} template={template} onChange={(t) => {
+                  set((st) => ({ flyer: { ...st.flyer, template: t } }));
+                  setFieldErrors({});
+                }} />
+              ) : flyerConfigError ? (
+                <Alert kind="error">Could not load the flyer templates: {flyerConfigError}</Alert>
+              ) : (
+                <p className="text-sm text-muted">Loading templates…</p>
+              )}
+
+              {template === "generic" ? (
+                <>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <TextArea label="Ad idea or angle" placeholder="e.g. Year-end tax moves for small business owners"
+                      value={form.adIdea} onChange={(v) => setForm({ adIdea: v })} />
+                    <div className="space-y-2.5">
+                      <TextInput label="Current event to connect to" placeholder="Leave blank and AI picks a trending event"
+                        value={form.eventContext} onChange={(v) => setForm({ eventContext: v })} />
+                      <div className="flex flex-wrap gap-2">
+                        {EVENT_SUGGESTIONS.map((ev) => (
+                          <button key={ev} type="button" onClick={() => setForm({ eventContext: ev })}
+                            className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+                              form.eventContext === ev
+                                ? "border-accent/40 bg-accent/10 text-accent"
+                                : "border-line bg-canvas text-navy hover:border-navy/30"
+                            }`}>
+                            {ev}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </div>
+                  <TextInput
+                    label="Call-to-action URL"
+                    placeholder="https://www.agfintax.com/contact/"
+                    hint="Used in the captions. Leave blank to use the website URL."
+                    value={form.contactUrl}
+                    onChange={(v) => setForm({ contactUrl: v })}
+                  />
+                </>
+              ) : flyerConfig && (
+                <FieldGrid fields={briefFields} values={inputs} errors={fieldErrors}
+                  timezones={flyerConfig.timezones} onChange={setFlyerValue} />
+              )}
+
               <fieldset>
                 <legend className="mb-1.5 text-sm font-medium text-navy">Platforms</legend>
                 <div className="flex flex-wrap gap-3">
@@ -389,13 +541,9 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
                   ))}
                 </div>
               </fieldset>
-              <TextInput
-                label="Call-to-action URL"
-                placeholder="https://www.agfintax.com/contact/"
-                hint="Printed as plain text on the image. Leave blank to use the website URL."
-                value={form.contactUrl}
-                onChange={(v) => setForm({ contactUrl: v })}
-              />
+
+              <CompanySection form={form} setForm={setForm} open={companyOpen} setOpen={setCompanyOpen} />
+
               <NoticeLine notice={notices.generate ?? null} />
               <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
                 <Button onClick={() => {
@@ -404,24 +552,16 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
                 }}>
                   Save draft
                 </Button>
-                <Button type="submit" variant="primary" icon={Zap}
-                  loading={busy === "generate" || busy === "generate-image"}>
-                  {busy === "generate-image" ? "Generating ad image…" : busy === "generate"
-                    ? "Researching and writing…" : "Generate campaign"}
+                <Button type="submit" variant="primary" icon={Zap} loading={busy === "generate"}>
+                  {busy === "generate" ? "Researching and writing…" : "Generate campaign"}
                 </Button>
               </div>
             </form>
           </Card>
 
           <aside className="space-y-6">
-            <BrandProfileCard brand={s.brand} onSave={saveBrand} />
-            <SideCard title="What happens next">
-              <ol className="list-decimal space-y-2 pl-4 text-sm text-ink marker:text-muted">
-                <li>We research the company and find a relevant current event.</li>
-                <li>You review and edit captions for each platform.</li>
-                <li>Generate the ad image, then publish or download.</li>
-              </ol>
-            </SideCard>
+            {flyerConfig && <FlyerPreviewCard config={flyerConfig} template={template} values={previewValues} />}
+            <BrandProfileCard brand={s.brand} detailFields={flyerConfig ? detailFields(flyerConfig) : []} onSave={saveBrand} />
             <RecentDrafts drafts={s.drafts} activeId={s.draftId} onOpen={loadDraft} onDelete={deleteDraft} />
           </aside>
         </div>
@@ -432,37 +572,43 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
           <Alert>Generate a campaign from the <strong>Brief</strong> step first.</Alert>
         ) : (
           <div className="space-y-5">
+            {captionsMismatch && <Alert kind="warning">{captionsMismatch}</Alert>}
             <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
               <section className={`rounded-xl border border-ocean/15 bg-tint p-5 ${campaign.quality_score ? "" : "lg:col-span-2"}`}>
                 <div className="flex items-center justify-between gap-3">
-                  <div className="text-[11px] font-bold uppercase tracking-wider text-navy/70">Event used</div>
-                  <button
-                    type="button"
-                    disabled={busy === "retry"}
-                    onClick={() =>
-                      run("retry", async () => {
-                        try {
-                          const data = await callApi<Campaign>("ad", "retry-event", {
-                            company_name: companyName,
-                            company_url: form.companyUrl,
-                          });
-                          if (data.success) {
-                            setCampaign(data);
-                            saveDraft();
-                            notify("retry", null);
-                          } else {
-                            notify("retry", { kind: "error", text: `Could not get a new event: ${data.error}` });
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-navy/70">
+                    {template === "generic" ? "Event used" : "Written for"}
+                  </div>
+                  {/* Service and Webinar are tied to their own topic, not a trending event. */}
+                  {template === "generic" && (
+                    <button
+                      type="button"
+                      disabled={busy === "retry"}
+                      onClick={() =>
+                        run("retry", async () => {
+                          try {
+                            const data = await callApi<Campaign>("ad", "retry-event", {
+                              company_name: companyName,
+                              company_url: form.companyUrl,
+                            });
+                            if (data.success) {
+                              setCampaign(data, template);
+                              saveDraft();
+                              notify("retry", null);
+                            } else {
+                              notify("retry", { kind: "error", text: `Could not get a new event: ${data.error}` });
+                            }
+                          } catch (e) {
+                            notify("retry", { kind: "error", text: `Something went wrong retrying the event: ${(e as Error).message}` });
                           }
-                        } catch (e) {
-                          notify("retry", { kind: "error", text: `Something went wrong retrying the event: ${(e as Error).message}` });
-                        }
-                      })
-                    }
-                    className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-navy/20 bg-white/70 px-3 py-1 text-xs font-semibold text-navy hover:bg-white disabled:opacity-60"
-                  >
-                    <RefreshCw className={`size-3.5 ${busy === "retry" ? "animate-spin" : ""}`} aria-hidden />
-                    {busy === "retry" ? "Finding a new event…" : "Try another event"}
-                  </button>
+                        })
+                      }
+                      className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-navy/20 bg-white/70 px-3 py-1 text-xs font-semibold text-navy hover:bg-white disabled:opacity-60"
+                    >
+                      <RefreshCw className={`size-3.5 ${busy === "retry" ? "animate-spin" : ""}`} aria-hidden />
+                      {busy === "retry" ? "Finding a new event…" : "Try another event"}
+                    </button>
+                  )}
                 </div>
                 <p className="mt-2 text-[15px] font-medium leading-relaxed text-navy">
                   {campaign.detected_event || "No specific event was used."}
@@ -481,6 +627,13 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
               )}
             </div>
             <NoticeLine notice={notices.retry ?? null} />
+
+            {flyerConfig && fieldsFor(flyerConfig, template, "review").length > 0 && (
+              <section className="rounded-xl border border-line bg-white p-5 shadow-sm">
+                <FieldGrid fields={fieldsFor(flyerConfig, template, "review")} values={inputs} errors={fieldErrors}
+                  timezones={flyerConfig.timezones} onChange={setFlyerValue} />
+              </section>
+            )}
 
             {Object.keys(details).length > 0 && (
               <Expander title="Company details used in generation" icon={Building2}>
@@ -505,14 +658,22 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
           <Alert>Generate a campaign from the <strong>Brief</strong> step first.</Alert>
         ) : (
           <div className="space-y-6">
+            {captionsMismatch && <Alert kind="warning">{captionsMismatch}</Alert>}
             <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
-              <ImageCard
+              <FlyerCard
+                config={flyerConfig}
+                configError={flyerConfigError}
+                template={template}
+                values={inputs}
                 image={s.image}
-                providerFailed={s.providerFailed}
-                busy={busy === "generate-image" ? "image" : busy}
+                generating={busy === "image"}
+                switching={busy === "switch"}
+                fieldErrors={fieldErrors}
                 notice={notices.image ?? null}
-                background={s.brand.colors[0] ?? DEFAULT_BRAND.colors[0]}
-                onGenerate={(customPrompt) => run("image", () => generateImage(campaign, customPrompt))}
+                providerFailed={s.providerFailed}
+                onChange={setFlyerValue}
+                onEditDetails={() => set({ tab: template === "generic" ? "review" : "generate" })}
+                onGenerate={() => run("image", generateFlyer)}
                 onSwitchProvider={(p) => run("switch", async () => {
                   try {
                     await callApi("ad", "switch-image-provider", { provider: p.next_provider_name });
@@ -524,21 +685,24 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
               />
               <aside className="space-y-6">
                 <PublishCard
-                  imageUrl={s.image?.clean_image_url ?? null}
+                  imageUrl={readyImage?.clean_image_url ?? null}
+                  needsImageText={s.image && !readyImage
+                    ? "The flyer is outdated. Generate a new preview to publish."
+                    : "Generate a preview to publish."}
                   captions={s.captions}
                   platforms={s.platforms}
                   onLinkedInPosted={(urn) => set({ linkedinPostUrn: urn })}
                 />
                 <NotPostingCard
-                  image={s.image}
+                  image={readyImage}
                   captionsFile={captionsFile(PLATFORMS.filter((p) => s.platforms.includes(p.key)), s.captions)}
                   onSave={saveDraft}
                 />
               </aside>
             </div>
-            {s.image && showPaidPromotion && (
+            {readyImage && showPaidPromotion && (
               <PaidPromotionCard
-                imageUrl={s.image.clean_image_url}
+                imageUrl={readyImage.clean_image_url}
                 campaignName={`${companyName} - ${campaign.detected_event || "campaign"}`}
                 facebookMessage={s.captions.facebook ?? ""}
                 headline={campaign.ads?.image_headline ?? ""}
@@ -549,6 +713,44 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
         )
       )}
     </>
+  );
+}
+
+/** Company website, name and description: nearly always the same, so folded
+ * away with a one-line summary. */
+function CompanySection({ form, setForm, open, setOpen }: {
+  form: Form;
+  setForm: (patch: Partial<Form>) => void;
+  open: boolean;
+  setOpen: (open: boolean) => void;
+}) {
+  const site = form.companyUrl.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "");
+  const summary = [form.companyName || "No company name yet", site].filter(Boolean).join(" · ");
+  return (
+    <div className="rounded-lg border border-line bg-white">
+      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open}
+        className="flex w-full items-center gap-3 px-4 py-3 text-left">
+        <Building2 className="size-5 text-navy" aria-hidden />
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm font-semibold text-navy">Company</span>
+          <span className="block truncate text-xs text-muted">{summary}</span>
+        </span>
+        <span className="text-xs font-semibold text-accent">{open ? "Close" : "Edit"}</span>
+        <ChevronDown className={`size-4 text-muted transition-transform ${open ? "rotate-180" : ""}`} aria-hidden />
+      </button>
+      {open && (
+        <div className="space-y-4 border-t border-line px-4 py-4">
+          <div className="grid gap-4 md:grid-cols-2">
+            <TextInput label="Company website" placeholder="https://www.agfintax.com/"
+              value={form.companyUrl} onChange={(v) => setForm({ companyUrl: v })} />
+            <TextInput label="Company name *" placeholder="AGFinTax"
+              value={form.companyName} onChange={(v) => setForm({ companyName: v })} />
+          </div>
+          <TextArea label="What does the company do?" placeholder="Auto-filled from the website if left blank"
+            value={form.productDescription} onChange={(v) => setForm({ productDescription: v })} />
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -656,11 +858,25 @@ function SideCard({ title, action, children }: { title: string; action?: ReactNo
 
 const linkButton = "text-sm font-semibold text-accent hover:text-accent-dark";
 
-function BrandProfileCard({ brand, onSave }: { brand: Brand; onSave: (b: Brand) => void }) {
+/** Tone, audience and colours steer the AI; the speaker and contact details
+ * are printed on every flyer exactly as entered (empty = approved default). */
+function BrandProfileCard({ brand, detailFields, onSave }: {
+  brand: Brand;
+  detailFields: FlyerField[];
+  onSave: (b: Brand) => void;
+}) {
   const [edit, setEdit] = useState<Brand | null>(null);
+  const [errors, setErrors] = useState<Record<string, string>>({});
   const label = "text-[11px] font-bold uppercase tracking-wider text-muted";
+  const detail = (b: Brand, f: FlyerField) => b.details?.[f.key]?.trim() || f.default || "";
+  const byPrefix = (prefix: string) =>
+    detailFields.filter((f) => f.key.startsWith(prefix)).map((f) => detail(brand, f)).filter(Boolean).join(" · ");
 
   if (edit) {
+    const setDetail = (key: string, value: string) => {
+      setEdit({ ...edit, details: { ...edit.details, [key]: value } });
+      setErrors((e) => Object.fromEntries(Object.entries(e).filter(([k]) => k !== key)));
+    };
     return (
       <SideCard title="Brand profile">
         <div className="space-y-3">
@@ -676,9 +892,34 @@ function BrandProfileCard({ brand, onSave }: { brand: Brand; onSave: (b: Brand) 
               ))}
             </div>
           </div>
+          {detailFields.length > 0 && (
+            <div className="space-y-3 border-t border-line pt-3">
+              <p className="text-xs text-muted">Printed on the flyers exactly as entered. Leave empty for the default.</p>
+              {detailFields.map((f) => (
+                <div key={f.key}>
+                  <TextInput label={f.label} type={f.type === "email" ? "email" : "text"} maxLength={f.max}
+                    placeholder={f.default} value={edit.details?.[f.key] ?? f.default ?? ""}
+                    onChange={(v) => setDetail(f.key, v)} />
+                  {errors[f.key] && <p className="mt-1 text-xs font-medium text-danger">{errors[f.key]}</p>}
+                </div>
+              ))}
+            </div>
+          )}
           <div className="flex justify-end gap-2 pt-1">
-            <Button variant="ghost" onClick={() => setEdit(null)}>Cancel</Button>
+            <Button variant="ghost" onClick={() => {
+              setEdit(null);
+              setErrors({});
+            }}>
+              Cancel
+            </Button>
             <Button variant="primary" onClick={() => {
+              const found = Object.fromEntries(detailFields
+                .map((f) => [f.key, fieldError(f, edit.details?.[f.key] ?? "")])
+                .filter(([, e]) => e));
+              if (Object.keys(found).length) {
+                setErrors(found);
+                return;
+              }
               onSave(edit);
               setEdit(null);
             }}>
@@ -709,6 +950,18 @@ function BrandProfileCard({ brand, onSave }: { brand: Brand; onSave: (b: Brand) 
             ))}
           </dd>
         </div>
+        {byPrefix("speaker_") && (
+          <div>
+            <dt className={label}>Webinar speaker</dt>
+            <dd className="mt-0.5 text-ink">{byPrefix("speaker_")}</dd>
+          </div>
+        )}
+        {byPrefix("contact_") && (
+          <div>
+            <dt className={label}>Flyer contact details</dt>
+            <dd className="mt-0.5 break-words text-ink">{byPrefix("contact_")}</dd>
+          </div>
+        )}
       </dl>
     </SideCard>
   );
@@ -754,143 +1007,14 @@ function RecentDrafts({ drafts, activeId, onOpen, onDelete }: {
   );
 }
 
-const RATIOS = {
-  "4:5": { size: [4, 5], frame: "aspect-[4/5] max-w-sm" },
-  "1:1": { size: [1, 1], frame: "aspect-square max-w-sm" },
-  "9:16": { size: [9, 16], frame: "aspect-[9/16] max-w-[290px]" },
-} as const;
-type Ratio = keyof typeof RATIOS;
-
-// The backend renders one size; other ratios are produced by fitting the whole
-// image (nothing cropped) onto a canvas filled with the brand background.
-async function framedImage(src: string, ratio: Ratio, background: string): Promise<Blob> {
-  const img = new Image();
-  img.src = src;
-  await img.decode();
-  const [w, h] = RATIOS[ratio].size;
-  const { naturalWidth: iw, naturalHeight: ih } = img;
-  const [cw, ch] = iw / ih > w / h ? [iw, Math.round((iw * h) / w)] : [Math.round((ih * w) / h), ih];
-  const canvas = Object.assign(document.createElement("canvas"), { width: cw, height: ch });
-  const ctx = canvas.getContext("2d")!;
-  ctx.fillStyle = background;
-  ctx.fillRect(0, 0, cw, ch);
-  ctx.drawImage(img, Math.round((cw - iw) / 2), Math.round((ch - ih) / 2));
-  return new Promise((resolve, reject) =>
-    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Could not export the image."))), "image/png"),
-  );
-}
-
-const imageName = (image: AdImage) => image.clean_image_url.split("/").pop() || "ad-image.png";
-
-function ImageCard({ image, providerFailed, busy, notice, background, onGenerate, onSwitchProvider }: {
-  image: AdImage | null;
-  providerFailed: ProviderFailed | null;
-  busy: string | null;
-  notice: Notice;
-  background: string;
-  onGenerate: (customPrompt: string) => void;
-  onSwitchProvider: (p: ProviderFailed) => void;
-}) {
-  const [ratio, setRatio] = useState<Ratio>("4:5");
-  const [useCustom, setUseCustom] = useState(false);
-  const [customPrompt, setCustomPrompt] = useState(image?.prompt ?? "");
-  const [downloadError, setDownloadError] = useState<Notice>(null);
-  const src = image ? `/api/ad${image.clean_image_url}` : null;
-  const generating = busy === "image";
-
-  async function download() {
-    if (!image || !src) return;
-    setDownloadError(null);
-    try {
-      const blob = await framedImage(src, ratio, background);
-      downloadBlob(imageName(image).replace(/\.\w+$/, "") + `_${ratio.replace(":", "x")}.png`, blob);
-    } catch (e) {
-      setDownloadError({ kind: "error", text: `Could not download the image: ${(e as Error).message}` });
-    }
-  }
-
-  return (
-    <section className="space-y-4 rounded-xl border border-line bg-white p-5 shadow-sm md:p-6">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-xl font-bold">Ad image</h2>
-        <div className="inline-flex rounded-md border border-line bg-canvas p-0.5" role="group" aria-label="Aspect ratio">
-          {(Object.keys(RATIOS) as Ratio[]).map((r) => (
-            <button key={r} type="button" aria-pressed={r === ratio} onClick={() => setRatio(r)}
-              className={`rounded px-2.5 py-1 text-xs font-semibold transition-colors ${
-                r === ratio ? "bg-white text-navy shadow-sm" : "text-muted hover:text-navy"
-              }`}>
-              {r}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className={`relative mx-auto flex w-full items-center justify-center overflow-hidden rounded-lg ${RATIOS[ratio].frame}`}
-        style={{ background: src ? background : undefined }}>
-        {src ? (
-          // eslint-disable-next-line @next/next/no-img-element -- generated on the backend, served via our proxy
-          <img src={src} alt="Generated ad" className={`size-full object-contain ${generating ? "opacity-40" : ""}`} />
-        ) : (
-          <div className="flex size-full flex-col items-center justify-center gap-2 border border-dashed border-line bg-canvas text-sm text-muted">
-            <Sparkles className={`size-6 ${generating ? "animate-pulse text-accent" : ""}`} aria-hidden />
-            {generating ? "Generating your ad image…" : "No image yet"}
-          </div>
-        )}
-        {src && generating && (
-          <div className="absolute inset-0 flex items-center justify-center text-sm font-semibold text-white">
-            Generating a new image…
-          </div>
-        )}
-      </div>
-
-      <div className="flex gap-3">
-        <Button variant="primary" icon={Sparkles} className="flex-1" loading={generating}
-          onClick={() => onGenerate(useCustom ? customPrompt : "")}>
-          {generating ? "Generating image…" : image ? "Regenerate image" : "Generate image"}
-        </Button>
-        <Button icon={Download} disabled={!image || generating} onClick={download}>Download</Button>
-      </div>
-      {image && <p className="text-xs text-muted">Image model: {image.provider ?? "openai_image"}</p>}
-      <NoticeLine notice={notice ?? downloadError} />
-      {providerFailed && (
-        <Alert kind="warning">
-          <div className="flex flex-wrap items-center gap-3">
-            <span>
-              {providerFailed.failed_provider} failed. Switch to {providerFailed.next_provider_label} and try again.
-            </span>
-            <Button loading={busy === "switch"} onClick={() => onSwitchProvider(providerFailed)}>
-              Switch to {providerFailed.next_provider_label}
-            </Button>
-          </div>
-        </Alert>
-      )}
-
-      <Expander title="Customize image prompt" icon={SlidersHorizontal}>
-        <div className="space-y-3">
-          <p className="text-sm text-muted">
-            By default the background scene is written automatically by AI, tailored to your company/event/copy — you
-            don&apos;t need to fill this in. The box below is only for overriding that with your own description.
-          </p>
-          <Checkbox label="Use my own image prompt instead" checked={useCustom} onChange={setUseCustom} />
-          <TextArea label="Describe the image you want" value={customPrompt} onChange={setCustomPrompt} disabled={!useCustom} />
-        </div>
-      </Expander>
-      {image?.prompt && (
-        <Expander title="Background prompt used (AI-written)" icon={History}>
-          <pre className="whitespace-pre-wrap text-xs text-ink">{image.prompt}</pre>
-        </Expander>
-      )}
-    </section>
-  );
-}
-
 // Platforms the backend can post to; the rest can only be downloaded.
 const POST_TARGETS = ["instagram", "facebook", "linkedin"] as const;
 
 type PostState = { status: "posting" | "posted" | "failed"; error?: string };
 
-function PublishCard({ imageUrl, captions, platforms, onLinkedInPosted }: {
+function PublishCard({ imageUrl, needsImageText, captions, platforms, onLinkedInPosted }: {
   imageUrl: string | null;
+  needsImageText: string;
   captions: Record<string, string>;
   platforms: string[];
   onLinkedInPosted: (urn: string) => void;
@@ -927,7 +1051,7 @@ function PublishCard({ imageUrl, captions, platforms, onLinkedInPosted }: {
     if (st === "posting") return <span className="text-xs font-semibold text-muted">Posting…</span>;
     if (st === "posted") return <span className="rounded bg-success/10 px-2 py-0.5 text-xs font-semibold text-success">Posted</span>;
     if (st === "failed") return <span className="rounded bg-danger/10 px-2 py-0.5 text-xs font-semibold text-danger">Failed</span>;
-    if (!imageUrl) return <span className="text-xs text-muted">Needs image</span>;
+    if (!imageUrl) return <span className="text-xs text-muted">Needs flyer</span>;
     if (!captions[key]?.trim()) return <span className="text-xs text-muted">No caption</span>;
     return <span className="rounded bg-success/10 px-2 py-0.5 text-xs font-semibold text-success">Ready</span>;
   };
@@ -990,7 +1114,7 @@ function PublishCard({ imageUrl, captions, platforms, onLinkedInPosted }: {
         onClick={publish}>
         {busy ? "Publishing…" : `Publish to ${chosen.length} account${chosen.length === 1 ? "" : "s"}`}
       </Button>
-      {!imageUrl && <p className="mt-2 text-center text-xs text-muted">Generate the ad image first.</p>}
+      {!imageUrl && <p className="mt-2 text-center text-xs text-muted">{needsImageText}</p>}
     </section>
   );
 }
@@ -1031,8 +1155,9 @@ function NotPostingCard({ image, captionsFile, onSave }: {
         }}>
           Save to drafts
         </Button>
-        <Button loading={busy} onClick={downloadPackage}>Download package</Button>
+        <Button loading={busy} disabled={!image} onClick={downloadPackage}>Download package</Button>
       </div>
+      {!image && <p className="mt-3 text-xs text-muted">Generate a preview to enable download.</p>}
       {notice && <div className="mt-3"><NoticeLine notice={notice} /></div>}
     </SideCard>
   );

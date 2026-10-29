@@ -10,8 +10,9 @@ export default async function AdGeneratorPage() {
   return (
     <AdGenerator
       defaults={{
-        companyUrl: process.env.DEFAULT_COMPANY_URL ?? "",
-        companyName: process.env.DEFAULT_COMPANY_NAME ?? "",
+        // This deployment is AGFinTax's; the Brief folds these away prefilled.
+        companyUrl: process.env.DEFAULT_COMPANY_URL || "https://www.agfintax.com/",
+        companyName: process.env.DEFAULT_COMPANY_NAME || "AGFinTax",
         contactUrl: process.env.DEFAULT_CONTACT_URL ?? "",
       }}
       // Off by default: this creates real (draft) campaigns on live Marketing APIs.
