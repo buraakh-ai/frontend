@@ -18,9 +18,7 @@ import {
 } from "@/components/ui";
 
 const PLATFORMS = [
-  { key: "tiktok", label: "TikTok / Reels", color: "#FE2C55" },
   { key: "instagram", label: "Instagram", color: "#C13584" },
-  { key: "twitter", label: "X / Twitter", color: "#0f172a" },
   { key: "facebook", label: "Facebook", color: "#1877f2" },
   { key: "linkedin", label: "LinkedIn", color: "#0a66c2" },
 ] as const;
@@ -227,7 +225,7 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
   function loadDraft(d: SavedDraft) {
     set({
       form: d.form,
-      platforms: d.platforms,
+      platforms: d.platforms.filter((k) => PLATFORMS.some((p) => p.key === k)),
       campaign: d.campaign,
       captions: d.captions,
       image: d.image,
@@ -1007,9 +1005,6 @@ function RecentDrafts({ drafts, activeId, onOpen, onDelete }: {
   );
 }
 
-// Platforms the backend can post to; the rest can only be downloaded.
-const POST_TARGETS = ["instagram", "facebook", "linkedin"] as const;
-
 type PostState = { status: "posting" | "posted" | "failed"; error?: string };
 
 function PublishCard({ imageUrl, needsImageText, captions, platforms, onLinkedInPosted }: {
@@ -1019,8 +1014,7 @@ function PublishCard({ imageUrl, needsImageText, captions, platforms, onLinkedIn
   platforms: string[];
   onLinkedInPosted: (urn: string) => void;
 }) {
-  const targets = PLATFORMS.filter((p) => (POST_TARGETS as readonly string[]).includes(p.key) && platforms.includes(p.key));
-  const unsupported = PLATFORMS.filter((p) => !(POST_TARGETS as readonly string[]).includes(p.key) && platforms.includes(p.key));
+  const targets = PLATFORMS.filter((p) => platforms.includes(p.key));
   const [unchecked, setUnchecked] = useState<Record<string, boolean>>({});
   const [states, setStates] = useState<Record<string, PostState>>({});
   const [busy, setBusy] = useState(false);
@@ -1082,14 +1076,6 @@ function PublishCard({ imageUrl, needsImageText, captions, platforms, onLinkedIn
             </li>
           );
         })}
-        {unsupported.length > 0 && (
-          <li className="flex items-center gap-3 rounded-lg border border-dashed border-line px-3.5 py-3"
-            title="Posting to these isn't supported yet; download the image and captions instead.">
-            <input type="checkbox" disabled className="size-4 shrink-0" aria-label="Not available" />
-            <span className="flex-1 text-sm text-muted">{unsupported.map((p) => p.label).join(" · ")}</span>
-            <span className="text-xs font-semibold text-muted">Coming soon</span>
-          </li>
-        )}
       </ul>
 
       <div className="mt-5">
