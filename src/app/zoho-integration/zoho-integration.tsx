@@ -216,9 +216,8 @@ export function ZohoIntegration() {
 
       {s.tab === "campaign" ? (
         <div className="space-y-6">
-          {/* "New from a content URL" is read-only for now: copying is the supported flow. */}
           <SegmentedControl label="Start from" options={CAMPAIGN_MODES} value={s.campaignMode}
-            disabled={[CAMPAIGN_MODES[1]]} onChange={(campaignMode) => set({ campaignMode })} />
+            onChange={(campaignMode) => set({ campaignMode })} />
           {s.campaignMode === CAMPAIGN_MODES[0] ? (
             <CloneCampaign />
           ) : (
