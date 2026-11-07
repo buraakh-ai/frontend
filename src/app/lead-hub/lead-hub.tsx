@@ -224,7 +224,8 @@ export function LeadHub({ hubConnected }: { hubConnected: boolean }) {
                   rows={visible.map((i) => {
                     const l = leads[i];
                     return {
-                      name: [l.first_name, l.last_name].filter(Boolean).join(" "),
+                      // A company lead with no decision maker has no person name: show the company.
+                      name: [l.first_name, l.last_name].filter(Boolean).join(" ") || (l.company ?? ""),
                       email: l.email ?? "",
                       phone: l.phone ?? "",
                       company: l.company ?? "",
