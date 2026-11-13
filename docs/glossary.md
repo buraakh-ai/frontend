@@ -89,6 +89,7 @@ A lead the person can contact: it has a phone number or an email. Anything witho
 |---|---|
 | Yellow Pages | Public US business directory. The main source: almost every listing has a phone number, and most have a website. |
 | Overture Maps | Free, open dataset of places (businesses) worldwide, read from a public file. Most restaurants and many other businesses have a phone and website; closed and low-confidence records are dropped. Quality varies. |
+| Foursquare | Foursquare's free, open dataset of places (US only). Finds many businesses that other sources miss; closed, flagged and long-unrefreshed places are dropped. Quality varies. |
 | OpenStreetMap | Free, open map of businesses worldwide, often with a phone, email and website. Coverage varies by area. |
 | Public web | Results from free web search engines. List pages and articles are filtered out, so only individual businesses remain. |
 | Chambers | Chamber of commerce member directories found through web search. |
