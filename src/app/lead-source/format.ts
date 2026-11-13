@@ -56,6 +56,7 @@ export const paidSearches = (u: Usage) => num(u.tavily_searches) + num(u.brave_s
 // Names of the backend's discovery sources, as shown to people.
 const SOURCE_LABELS: Record<string, string> = {
   yellow_pages: "Yellow Pages",
+  overture: "Overture Maps",
   openstreetmap: "OpenStreetMap",
   web_search: "Public web",
   chambers: "Chambers",
