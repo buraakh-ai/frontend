@@ -10,7 +10,7 @@ import { zip } from "@/lib/zip";
 import {
   EMPTY_FLYER, FieldGrid, FlyerCard, FlyerPreviewCard, TemplatePicker, detailFields, fieldError, fieldsFor,
   flyerErrors, flyerFields, flyerKey, imageName,
-  type AdImage, type FlyerConfig, type FlyerField, type FlyerState, type FlyerTemplateId, type ProviderFailed,
+  type AdImage, type FlyerConfig, type ImageModels, type FlyerField, type FlyerState, type FlyerTemplateId, type ProviderFailed,
 } from "./flyer-studio";
 import {
   Alert, Button, Card, ChipSelect, DataTable, Expander, Metric, NumberInput, PageHeader, Select,
@@ -159,6 +159,8 @@ const store = createStore({
   image: null as AdImage | null,
   flyer: EMPTY_FLYER as FlyerState,
   providerFailed: null as ProviderFailed | null,
+  // The OpenAI image model picked in the flyer step; "" = the backend's default.
+  imageModel: "",
   linkedinPostUrn: null as string | null,
   facebookAdDraft: null as Draft | null,
   linkedinAdDraft: null as Draft | null,
@@ -219,6 +221,15 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
     callApi<FlyerConfig & { success?: boolean; error?: string }>("ad", "flyer-templates").then(
       (r) => (r.success ? setFlyerConfig(r) : setFlyerConfigError(r.error || "unknown error")),
       (e: Error) => setFlyerConfigError(e.message),
+    );
+  }, []);
+
+  // The image models OpenAI lists right now, for the flyer step's dropdown.
+  const [imageModels, setImageModels] = useState<ImageModels | null>(null);
+  useEffect(() => {
+    callApi<ImageModels>("ad", "image-models").then(
+      setImageModels,
+      (e: Error) => setImageModels({ models: [], default: "", live: false, error: e.message }),
     );
   }, []);
 
@@ -299,6 +310,7 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
         template: t,
         fields: flyerFields(flyerConfig, t, values),
         // Context for the Generic template's existing topic flow.
+        image_model: s.imageModel || imageModels?.default || "",
         campaign: {
           company_name: c.detected_company_name ?? form.companyName,
           instagram_copy: c.ads?.instagram ?? "",
@@ -670,6 +682,9 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
                 notice={notices.image ?? null}
                 providerFailed={s.providerFailed}
                 onChange={setFlyerValue}
+                imageModels={imageModels}
+                imageModel={s.imageModel}
+                onImageModelChange={(imageModel) => set({ imageModel })}
                 onEditDetails={() => set({ tab: template === "generic" ? "review" : "generate" })}
                 onGenerate={() => run("image", generateFlyer)}
                 onSwitchProvider={(p) => run("switch", async () => {

@@ -53,6 +53,10 @@ export async function GET(_request: NextRequest, ctx: RouteContext<"/api/ad/[...
     return proxyJson(`${adGeneratorBackendUrl()}/facebook-ad-config`, { method: "GET" }, 30_000);
   }
   // Flyer templates (fields and saved assets), and the saved assets themselves.
+  // The image models OpenAI currently lists (Ad Studio's model dropdown).
+  if (segments.join("/") === "image-models") {
+    return proxyJson(`${adGeneratorBackendUrl()}/image-models`, { method: "GET" }, 30_000);
+  }
   if (segments.join("/") === "flyer-templates") {
     return proxyJson(`${adGeneratorBackendUrl()}/flyer-templates`, { method: "GET" }, 30_000);
   }

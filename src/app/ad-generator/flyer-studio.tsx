@@ -48,6 +48,10 @@ export const EMPTY_FLYER: FlyerState = { template: "generic", values: { generic:
 
 /** A generated flyer. `template` and `inputsKey` record what it was made
  * from, so the page can tell when the inputs have changed since. */
+/** GET /image-models: OpenAI's current image models, newest first. live is
+ * false when OpenAI couldn't be reached and the configured ones are shown. */
+export type ImageModels = { models: { id: string }[]; default: string; live: boolean; error?: string };
+
 export type AdImage = {
   clean_image_url: string;
   provider?: string;
@@ -144,7 +148,7 @@ export function useFlyerSample(config: FlyerConfig | null, template: FlyerTempla
 }
 
 const TEMPLATE_CARDS: Record<FlyerTemplateId, { icon: typeof Megaphone; blurb: string }> = {
-  generic: { icon: Megaphone, blurb: "Brand post; AI picks the angle" },
+  generic: { icon: Megaphone, blurb: "Blank canvas; your own image prompt" },
   service: { icon: Wrench, blurb: "Promote a service, with a QR" },
   webinar: { icon: CalendarDays, blurb: "Event with date, speaker, QR" },
 };
@@ -258,7 +262,9 @@ export function FlyerPreviewCard({ config, template, values }: {
             </div>}
       </div>
       <p className="mt-2 text-xs text-muted">
-        Updates as you type. The middle artwork is generated in the last step; everything else is placed exactly.
+        {template === "generic"
+          ? "No logo, text or footer: the whole image is generated in the last step."
+          : "Updates as you type. The middle artwork is generated in the last step; everything else is placed exactly."}
       </p>
     </section>
   );
@@ -296,7 +302,8 @@ export const imageName = (image: AdImage) => image.clean_image_url.split("/").po
 /** Flyer & publish: the preview, artwork direction and generation. The
  * flyer's content is edited in the Brief (onEditDetails). */
 export function FlyerCard({ config, configError, template, values, image, generating, switching, fieldErrors,
-  notice, providerFailed, onChange, onEditDetails, onGenerate, onSwitchProvider }: {
+  notice, providerFailed, onChange, imageModels, imageModel, onImageModelChange, onEditDetails, onGenerate,
+  onSwitchProvider }: {
   config: FlyerConfig | null;
   configError: string | null;
   template: FlyerTemplateId;
@@ -308,6 +315,9 @@ export function FlyerCard({ config, configError, template, values, image, genera
   notice: Notice;
   providerFailed: ProviderFailed | null;
   onChange: (key: string, value: string) => void;
+  imageModels: ImageModels | null;
+  imageModel: string;
+  onImageModelChange: (model: string) => void;
   onEditDetails: () => void;
   onGenerate: () => void;
   onSwitchProvider: (p: ProviderFailed) => void;
@@ -328,7 +338,10 @@ export function FlyerCard({ config, configError, template, values, image, genera
   }
 
   const tpl = config.templates[template];
+  // Generic is a blank canvas: the generated image is the whole flyer.
+  const blank = template === "generic";
   const final = image && image.template === template ? image : null;
+  const customPrompt = blank && !!final?.prompt && final.prompt === (values.image_prompt ?? "").trim();
   const stale = !!final && final.inputsKey !== flyerKey(config, template, values);
   const src = final ? `/api/ad${final.clean_image_url}` : sample.src;
   // Brief fields with an error (e.g. a later backend check) send the user back.
@@ -356,7 +369,11 @@ export function FlyerCard({ config, configError, template, values, image, genera
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-2xl font-bold">Your flyer</h2>
-          <p className="mt-1 text-sm text-muted">{tpl.label} template · the details come from your brief.</p>
+          <p className="mt-1 text-sm text-muted">
+            {blank
+              ? `${tpl.label} template · blank canvas, no logo, text or footer.`
+              : `${tpl.label} template · the details come from your brief.`}
+          </p>
         </div>
         <div className="flex items-center gap-2">
           {badge}
@@ -381,7 +398,7 @@ export function FlyerCard({ config, configError, template, values, image, genera
                 {generating ? (
                   <>
                     <Sparkles className="size-6 animate-pulse text-accent" aria-hidden />
-                    Generating the artwork and composing your flyer…
+                    {blank ? "Generating your image…" : "Generating the artwork and composing your flyer…"}
                   </>
                 ) : (
                   <>Details changed since this flyer was made. Generate a new preview to publish or download it.</>
@@ -410,13 +427,15 @@ export function FlyerCard({ config, configError, template, values, image, genera
         <div className="space-y-4">
           <FieldGrid fields={fieldsFor(config, template, "flyer")} values={values} errors={fieldErrors}
             timezones={config.timezones} onChange={onChange} />
-          <TemplateAssets summary={tpl.asset_summary} assets={tpl.assets} />
+          {tpl.assets.length > 0 && <TemplateAssets summary={tpl.asset_summary} assets={tpl.assets} />}
+          <ImageModelPicker models={imageModels} value={imageModel} onChange={onImageModelChange} disabled={generating} />
           <Button variant="primary" icon={Sparkles} block loading={generating} onClick={onGenerate}>
             {generating ? "Generating preview…" : final && !stale ? "Regenerate preview" : "Generate preview"}
           </Button>
           <p className="text-xs text-muted">
-            Image generation starts only when you click Generate preview. Header, footer and QR are reused; only the
-            middle artwork is generated.
+            {blank
+              ? "Image generation starts only when you click Generate preview. The whole image is generated; a custom image prompt is used word for word."
+              : "Image generation starts only when you click Generate preview. Header, footer and QR are reused; only the middle artwork is generated."}
           </p>
           {briefErrors.length > 0 && (
             <Alert kind="error">
@@ -440,13 +459,38 @@ export function FlyerCard({ config, configError, template, values, image, genera
             </p>
           )}
           {final?.prompt && (
-            <Expander title="Artwork prompt used (AI-written)" icon={History}>
+            <Expander title={customPrompt ? "Image prompt used (yours, word for word)"
+              : blank ? "Image prompt used (AI-written)" : "Artwork prompt used (AI-written)"} icon={History}>
               <pre className="whitespace-pre-wrap text-xs text-ink">{final.prompt}</pre>
             </Expander>
           )}
         </div>
       </div>
     </section>
+  );
+}
+
+function ImageModelPicker({ models, value, onChange, disabled }: {
+  models: ImageModels | null;
+  value: string;
+  onChange: (model: string) => void;
+  disabled?: boolean;
+}) {
+  if (!models || models.models.length === 0) {
+    return <p className="text-xs text-muted">{models ? "No image models available." : "Loading image models…"}</p>;
+  }
+  const ids = models.models.map((m) => m.id);
+  const current = ids.includes(value) ? value : models.default || ids[0];
+  return (
+    <div>
+      <Select label="Image model" value={current} options={ids} disabled={disabled} onChange={onChange}
+        format={(id) => (id === models.default ? `${id} (default)` : id)} />
+      <p className="mt-1 text-xs text-muted">
+        {models.live
+          ? "Live list of OpenAI image models, newest first. The flyer is generated with the model you pick."
+          : "Couldn't reach OpenAI's model list, so the configured models are shown."}
+      </p>
+    </div>
   );
 }
 
