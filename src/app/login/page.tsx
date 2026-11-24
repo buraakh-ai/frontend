@@ -6,7 +6,7 @@ import { LogIn } from "lucide-react";
 import { auth, authEnabled, missingAuthEnv, signIn } from "@/auth";
 import { Alert, Button } from "@/components/ui";
 
-export const metadata: Metadata = { title: "Sign in · AGFinTax Growth Suite" };
+export const metadata: Metadata = { title: "Sign in · AG FinTax Growth Suite" };
 
 // Auth.js error codes (?error=...) worth explaining; anything else gets a generic message.
 const ERRORS: Record<string, string> = {
@@ -38,8 +38,8 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
   return (
     <div className="w-full max-w-sm rounded-xl border border-line bg-white p-8 shadow-sm">
       <Image src="/agfintax-mark.png" alt="AG FinTax" width={60} height={36} priority className="h-10 w-auto" />
-      <h1 className="mt-6 text-2xl font-bold">AGFinTax Growth Suite</h1>
-      <p className="mt-1.5 text-sm text-muted">Sign in with your AGFinTax Microsoft account to continue.</p>
+      <h1 className="mt-6 text-2xl font-bold">AG FinTax Growth Suite</h1>
+      <p className="mt-1.5 text-sm text-muted">Sign in with your AG FinTax Microsoft account to continue.</p>
       {error && <div className="mt-5"><Alert kind="error">{error}</Alert></div>}
       <form
         className="mt-6"

@@ -3,16 +3,16 @@ import { connection } from "next/server";
 import { envFlag } from "@/lib/server/backends";
 import { AdGenerator } from "./ad-generator";
 
-export const metadata: Metadata = { title: "Ad Studio · AGFinTax Growth Suite" };
+export const metadata: Metadata = { title: "Ad Studio · AG FinTax Growth Suite" };
 
 export default async function AdGeneratorPage() {
   await connection(); // read env at request time, not build time
   return (
     <AdGenerator
       defaults={{
-        // This deployment is AGFinTax's; the Brief folds these away prefilled.
+        // This deployment is AG FinTax's; the Brief folds these away prefilled.
         companyUrl: process.env.DEFAULT_COMPANY_URL || "https://www.agfintax.com/",
-        companyName: process.env.DEFAULT_COMPANY_NAME || "AGFinTax",
+        companyName: process.env.DEFAULT_COMPANY_NAME || "AG FinTax",
         contactUrl: process.env.DEFAULT_CONTACT_URL ?? "",
       }}
       // Off by default: this creates real (draft) campaigns on live Marketing APIs.

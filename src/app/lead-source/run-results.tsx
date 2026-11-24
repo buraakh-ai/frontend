@@ -333,7 +333,7 @@ export function RunDetails({ summary, sources, usage, leads }: { summary: Row | 
         <DataTable rows={sources.map((s) => ({ ...s, found_by: foundBy(s).join(" + ") }))}
           columns={["source_name", "found_by", "category", "city", "public_phone", "url", "rating", "review_count"]} />
       </Expander>
-      <Expander title="Why each lead may need AGFinTax (marketing notes and evidence)">
+      <Expander title="Why each lead may need AG FinTax (marketing notes and evidence)">
         <div className="space-y-4 text-sm">
           {leads.map((lead, i) => (
             <div key={i}>

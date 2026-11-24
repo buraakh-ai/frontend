@@ -756,7 +756,7 @@ function CompanySection({ form, setForm, open, setOpen }: {
           <div className="grid gap-4 md:grid-cols-2">
             <TextInput label="Company website" placeholder="https://www.agfintax.com/"
               value={form.companyUrl} onChange={(v) => setForm({ companyUrl: v })} />
-            <TextInput label="Company name *" placeholder="AGFinTax"
+            <TextInput label="Company name *" placeholder="AG FinTax"
               value={form.companyName} onChange={(v) => setForm({ companyName: v })} />
           </div>
           <TextArea label="What does the company do?" placeholder="Auto-filled from the website if left blank"

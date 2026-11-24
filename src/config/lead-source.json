@@ -4,7 +4,7 @@
     "page_icon": "🔎",
     "layout": "wide",
     "title": "Lead Sourcing",
-    "caption": "Discover, enrich, verify and centralize public business prospects for downstream AGFinTax campaigns."
+    "caption": "Discover, enrich, verify and centralize public business prospects for downstream AG FinTax campaigns."
   },
   "backend": {
     "default_url": "http://localhost:8000",

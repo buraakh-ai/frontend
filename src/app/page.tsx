@@ -5,7 +5,7 @@ import { GROUPS, MODULES, type Module, type ModuleGroup } from "@/lib/modules";
 import { currentUserName } from "@/lib/server/current-user";
 import { Today } from "./today";
 
-export const metadata: Metadata = { title: "Growth Hub · AGFinTax Growth Suite" };
+export const metadata: Metadata = { title: "Growth Hub · AG FinTax Growth Suite" };
 
 const TONES: Record<ModuleGroup, { tile: string; badge: string }> = {
   create: { tile: "bg-accent/10 text-accent", badge: "bg-accent/10 text-accent" },

@@ -19,7 +19,7 @@ function Brand() {
       <Image src="/agfintax-mark.png" alt="AG FinTax" width={60} height={36} priority className="h-9 w-auto shrink-0" />
       <div className="min-w-0">
         <div className="whitespace-nowrap font-display text-[15px] font-bold leading-tight text-navy">
-          AGFinTax Growth Suite
+          AG FinTax Growth Suite
         </div>
         <div className="text-xs text-muted">AI marketing &amp; growth</div>
       </div>

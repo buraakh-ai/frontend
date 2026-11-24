@@ -11,8 +11,8 @@ const redHat = Red_Hat_Display({ variable: "--font-red-hat", subsets: ["latin"] 
 const montserrat = Montserrat({ variable: "--font-montserrat", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "AGFinTax Growth Suite",
-  description: "AI marketing & growth modules for AGFinTax.",
+  title: "AG FinTax Growth Suite",
+  description: "AI marketing & growth modules for AG FinTax.",
 };
 
 async function signOutAction() {
