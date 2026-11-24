@@ -33,6 +33,7 @@ const SOURCES: Record<string, string> = {
   WEB_SCRAPING: "Lead Finder",
   BITRIX24: "Bitrix24",
   ZOOM_WEBINAR: "Zoom webinar",
+  FILE_UPLOAD: "File upload",
 };
 const ALL = "";
 // The Zoho export backend accepts at most this many records per write request.

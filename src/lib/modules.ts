@@ -3,6 +3,7 @@ import {
   Database,
   Download,
   ScanSearch,
+  Upload,
   Video,
   Volume1,
   type LucideIcon,
@@ -48,6 +49,13 @@ export const MODULES: Module[] = [
     icon: Download,
     group: "source",
     href: "/bitrix-export",
+  },
+  {
+    label: "Upload",
+    description: "Upload a CSV of leads from your computer and push them to the Lead Hub.",
+    icon: Upload,
+    group: "source",
+    href: "/upload",
   },
   {
     label: "Zoom Webinar Import",

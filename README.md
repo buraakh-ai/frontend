@@ -16,6 +16,7 @@ Field, score and status definitions for answering client questions:
 | Zoho Campaigns Sync | `src/app/zoho-integration` | zohoexport | `ZOHO_INTEGRATION_BACKEND_URL` |
 | Bitrix24 Export | `src/app/bitrix-export` | bitrixexport (which exports to the Lead Hub) | `BITRIX_EXPORT_BACKEND_URL` (+ `BITRIX_EXPORT_API_KEY`) |
 | Lead Hub | `src/app/lead-hub` | Lead Hub backend (AWS RDS) (+ zohoexport to sync) | `LEAD_HUB_BACKEND_URL` |
+| Upload | `src/app/upload` | none (CSV parsed in the browser); pushes to the Lead Hub | `LEAD_HUB_BACKEND_URL` |
 
 ## Run locally
 
@@ -33,7 +34,7 @@ Production build: `npm run build && npm start`. Lint: `npm run lint`.
 
 ## How it's put together
 
-- `src/app/ad-generator`, `src/app/lead-source`, `src/app/zoho-integration`, `src/app/bitrix-export`, `src/app/lead-hub` — the module pages. Each
+- `src/app/ad-generator`, `src/app/lead-source`, `src/app/zoho-integration`, `src/app/bitrix-export`, `src/app/upload`, `src/app/lead-hub` — the module pages. Each
   `page.tsx` is a server component that reads env/config and renders the
   client component next to it.
 - `src/app/api/{ad,lead,zoho,bitrix,hub}/[...path]` — server-side
@@ -199,16 +200,33 @@ through the source's own backend (which is configured with `LEAD_HUB_API_URL`):
   response → `{sent, message}`), which posts them to the Lead Hub's `/webScrapingLeads`.
 - Bitrix24 Export: its backend's `POST /exportToLeadHub` (above) posts them to
   the Lead Hub's `/bitrixLeads`.
+- Upload: the one source without a backend. The page reads a CSV from the
+  person's computer in the browser, matches its columns to the template (first
+  name, last name, email, phone, address lines 1 and 2, city, state, country,
+  zip code, plus optional company and job title), and posts the ticked rows to
+  the Lead Hub's `POST /fileUploadLeads` through the `/api/hub` proxy, in batches
+  of at most 1000. The Lead Hub requires an email on every record, so rows
+  without a valid email are never sent ("Push all" skips them); rows repeating
+  an earlier email in the file start unchecked (sending one updates the same lead).
 
 The Lead Hub page (`src/app/lead-hub`) only reads from it. The `/api/hub` proxy
-allow-lists one endpoint, and answers "not connected" until `LEAD_HUB_BACKEND_URL`
+allow-lists these endpoints, and answers "not connected" until `LEAD_HUB_BACKEND_URL`
 is set:
 
 | Endpoint | Request | Response |
 |---|---|---|
 | `GET /leads` | `?from=YYYY-MM-DD&to=YYYY-MM-DD` (both required, inclusive, by when the lead landed, UTC) | `[{"source_code", "lead_id", "email", "first_name", "last_name", "phone", "company", "job_title", "city", "country", "zoho_sync_status", "zoho_contact_id", "ingested_at"}, ...]`, newest first |
+| `POST /fileUploadLeads` | `{"file_name", "uploaded_by", "records": [{"first_name", "last_name", "email", "phone", "address_line1", "address_line2", "city", "state", "country", "zip_code", "company_name", "job_title", "row_number", "extra_fields": {"<file column>": "<value>"}}, ...]}` (1–1000 records; `email` required, lower-cased; other fields may be `null`) | `201`, `{"upload_id", "row_count", "lead_ids": [...]}` |
 
-`source_code` is `WEB_SCRAPING` (Lead Finder), `BITRIX24` or `ZOOM_WEBINAR`; the
+`uploaded_by` is set by the proxy from the signed-in user (SSO, else the ALB's
+claims; `DEV_USER_EMAIL` locally), never by the browser. The Lead Hub writes
+one `file_upload_batch` row per request and upserts each record into
+`file_upload_lead` by email under the `FILE_UPLOAD` source; the whole record is
+kept as its raw payload. If any record is invalid it answers 422 and writes
+nothing. The tables come from leadhubexport's
+`migrations/001_file_upload_leads.sql`.
+
+`source_code` is `WEB_SCRAPING` (Lead Finder), `BITRIX24`, `ZOOM_WEBINAR` or `FILE_UPLOAD` (Upload); the
 page filters by it. `zoho_sync_status` is e.g. `pending` or `synced`; leads already
 `synced` start unchecked.
 

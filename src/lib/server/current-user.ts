@@ -20,6 +20,20 @@ function decodeJwtPayload(token: string): Claims | null {
   }
 }
 
+/** Email of the signed-in user (SSO, else the ALB's claims), or null when the
+ * request carries none. DEV_USER_EMAIL stands in locally. */
+export async function currentUserEmail(): Promise<string | null> {
+  if (authEnabled() && missingAuthEnv().length === 0) {
+    const ssoEmail = (await auth())?.user?.email?.trim();
+    if (ssoEmail) return ssoEmail.toLowerCase();
+  }
+  const h = await headers();
+  const oidc = h.get("x-amzn-oidc-data");
+  const claims = oidc ? decodeJwtPayload(oidc) : null;
+  const email = claims?.email || (claims?.preferred_username?.includes("@") ? claims.preferred_username : undefined) || process.env.DEV_USER_EMAIL;
+  return email?.trim().toLowerCase() || null;
+}
+
 /** Display name of the signed-in user, or null when the request carries none.
  * DEV_USER_NAME stands in locally, where there is no sign-in. */
 export async function currentUserName(): Promise<string | null> {
