@@ -16,7 +16,7 @@ Field, score and status definitions for answering client questions:
 | Zoho Campaigns Sync | `src/app/zoho-integration` | zohoexport | `ZOHO_INTEGRATION_BACKEND_URL` |
 | Bitrix24 Export | `src/app/bitrix-export` | bitrixexport (which exports to the Lead Hub) | `BITRIX_EXPORT_BACKEND_URL` (+ `BITRIX_EXPORT_API_KEY`) |
 | Lead Hub | `src/app/lead-hub` | Lead Hub backend (AWS RDS) (+ zohoexport to sync) | `LEAD_HUB_BACKEND_URL` |
-| Upload | `src/app/upload` | none (CSV parsed in the browser); pushes to the Lead Hub | `LEAD_HUB_BACKEND_URL` |
+| Import Leads | `src/app/import-leads` | none (CSV parsed in the browser); pushes to the Lead Hub | `LEAD_HUB_BACKEND_URL` |
 
 ## Run locally
 
@@ -34,7 +34,7 @@ Production build: `npm run build && npm start`. Lint: `npm run lint`.
 
 ## How it's put together
 
-- `src/app/ad-generator`, `src/app/lead-source`, `src/app/zoho-integration`, `src/app/bitrix-export`, `src/app/upload`, `src/app/lead-hub` — the module pages. Each
+- `src/app/ad-generator`, `src/app/lead-source`, `src/app/zoho-integration`, `src/app/bitrix-export`, `src/app/import-leads`, `src/app/lead-hub` — the module pages. Each
   `page.tsx` is a server component that reads env/config and renders the
   client component next to it.
 - `src/app/api/{ad,lead,zoho,bitrix,hub}/[...path]` — server-side

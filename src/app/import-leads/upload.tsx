@@ -190,8 +190,8 @@ export function Upload() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Upload leads"
-        subtitle="Upload a CSV file from your computer, check its columns, review the leads, and push the ones you approve to the Lead Hub."
+        title="Import Leads"
+        subtitle="Import a CSV file from your computer, check its columns, review the leads, and push the ones you approve to the Lead Hub."
         actions={
           <Button icon={FileDown} onClick={() => downloadText("lead-upload-template.csv", templateCsv(), "text/csv")}>
             Download template
