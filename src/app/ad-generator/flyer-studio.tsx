@@ -300,10 +300,12 @@ async function framedImage(src: string, ratio: Ratio, background: string): Promi
 export const imageName = (image: AdImage) => image.clean_image_url.split("/").pop() || "ad-image.png";
 
 /** Flyer & publish: the preview, artwork direction and generation. The
- * flyer's content is edited in the Brief (onEditDetails). */
+ * flyer's content is edited in the Brief (onEditDetails). Generic is made
+ * in the Brief's playground, so here it is only previewed and downloaded;
+ * currentKey is then the playground's key (what the image must match). */
 export function FlyerCard({ config, configError, template, values, image, generating, switching, fieldErrors,
   notice, providerFailed, onChange, imageModels, imageModel, onImageModelChange, onEditDetails, onGenerate,
-  onSwitchProvider }: {
+  onSwitchProvider, currentKey }: {
   config: FlyerConfig | null;
   configError: string | null;
   template: FlyerTemplateId;
@@ -321,6 +323,7 @@ export function FlyerCard({ config, configError, template, values, image, genera
   onEditDetails: () => void;
   onGenerate: () => void;
   onSwitchProvider: (p: ProviderFailed) => void;
+  currentKey?: string;
 }) {
   const [ratio, setRatio] = useState<Ratio>("4:5");
   const [downloadError, setDownloadError] = useState<string | null>(null);
@@ -341,8 +344,7 @@ export function FlyerCard({ config, configError, template, values, image, genera
   // Generic is a blank canvas: the generated image is the whole flyer.
   const blank = template === "generic";
   const final = image && image.template === template ? image : null;
-  const customPrompt = blank && !!final?.prompt && final.prompt === (values.image_prompt ?? "").trim();
-  const stale = !!final && final.inputsKey !== flyerKey(config, template, values);
+  const stale = !!final && final.inputsKey !== (currentKey ?? flyerKey(config, template, values));
   const src = final ? `/api/ad${final.clean_image_url}` : sample.src;
   // Brief fields with an error (e.g. a later backend check) send the user back.
   const briefErrors = fieldsFor(config, template, "brief").filter((f) => fieldErrors[f.key]);
@@ -371,13 +373,13 @@ export function FlyerCard({ config, configError, template, values, image, genera
           <h2 className="text-2xl font-bold">Your flyer</h2>
           <p className="mt-1 text-sm text-muted">
             {blank
-              ? `${tpl.label} template · blank canvas, no logo, text or footer.`
+              ? `${tpl.label} template · made from your prompt and attachments in the Brief.`
               : `${tpl.label} template · the details come from your brief.`}
           </p>
         </div>
         <div className="flex items-center gap-2">
           {badge}
-          <Button icon={Pencil} onClick={onEditDetails}>Edit details</Button>
+          <Button icon={Pencil} onClick={onEditDetails}>{blank ? "Edit prompt" : "Edit details"}</Button>
         </div>
       </div>
 
@@ -400,6 +402,8 @@ export function FlyerCard({ config, configError, template, values, image, genera
                     <Sparkles className="size-6 animate-pulse text-accent" aria-hidden />
                     {blank ? "Generating your image…" : "Generating the artwork and composing your flyer…"}
                   </>
+                ) : blank ? (
+                  <>The prompt or attachments changed since this image was made. Regenerate it in the Brief.</>
                 ) : (
                   <>Details changed since this flyer was made. Generate a new preview to publish or download it.</>
                 )}
@@ -425,18 +429,32 @@ export function FlyerCard({ config, configError, template, values, image, genera
         </div>
 
         <div className="space-y-4">
-          <FieldGrid fields={fieldsFor(config, template, "flyer")} values={values} errors={fieldErrors}
-            timezones={config.timezones} onChange={onChange} />
-          {tpl.assets.length > 0 && <TemplateAssets summary={tpl.asset_summary} assets={tpl.assets} />}
-          <ImageModelPicker models={imageModels} value={imageModel} onChange={onImageModelChange} disabled={generating} />
-          <Button variant="primary" icon={Sparkles} block loading={generating} onClick={onGenerate}>
-            {generating ? "Generating preview…" : final && !stale ? "Regenerate preview" : "Generate preview"}
-          </Button>
-          <p className="text-xs text-muted">
-            {blank
-              ? "Image generation starts only when you click Generate preview. The whole image is generated; a custom image prompt is used word for word."
-              : "Image generation starts only when you click Generate preview. Header, footer and QR are reused; only the middle artwork is generated."}
-          </p>
+          {blank ? (
+            <div className="space-y-3 rounded-lg border border-line bg-canvas p-4 text-sm text-navy">
+              <p>
+                {final
+                  ? "This image was made in the Brief's playground from your prompt and attachments."
+                  : "No image yet. Generate one in the Brief's playground from your prompt and attachments."}
+              </p>
+              <Button icon={Pencil} onClick={onEditDetails}>
+                {final ? "Change the prompt or attachments" : "Open the playground"}
+              </Button>
+            </div>
+          ) : (
+            <>
+              <FieldGrid fields={fieldsFor(config, template, "flyer")} values={values} errors={fieldErrors}
+                timezones={config.timezones} onChange={onChange} />
+              {tpl.assets.length > 0 && <TemplateAssets summary={tpl.asset_summary} assets={tpl.assets} />}
+              <ImageModelPicker models={imageModels} value={imageModel} onChange={onImageModelChange} disabled={generating} />
+              <Button variant="primary" icon={Sparkles} block loading={generating} onClick={onGenerate}>
+                {generating ? "Generating preview…" : final && !stale ? "Regenerate preview" : "Generate preview"}
+              </Button>
+              <p className="text-xs text-muted">
+                Image generation starts only when you click Generate preview. Header, footer and QR are reused; only
+                the middle artwork is generated.
+              </p>
+            </>
+          )}
           {briefErrors.length > 0 && (
             <Alert kind="error">
               Fix in the brief: {briefErrors.map((f) => `${f.label}: ${fieldErrors[f.key]}`).join(" ")}
@@ -459,8 +477,7 @@ export function FlyerCard({ config, configError, template, values, image, genera
             </p>
           )}
           {final?.prompt && (
-            <Expander title={customPrompt ? "Image prompt used (yours, word for word)"
-              : blank ? "Image prompt used (AI-written)" : "Artwork prompt used (AI-written)"} icon={History}>
+            <Expander title={blank ? "Prompt sent to the image model" : "Artwork prompt used (AI-written)"} icon={History}>
               <pre className="whitespace-pre-wrap text-xs text-ink">{final.prompt}</pre>
             </Expander>
           )}
@@ -470,7 +487,7 @@ export function FlyerCard({ config, configError, template, values, image, genera
   );
 }
 
-function ImageModelPicker({ models, value, onChange, disabled }: {
+export function ImageModelPicker({ models, value, onChange, disabled }: {
   models: ImageModels | null;
   value: string;
   onChange: (model: string) => void;

@@ -9,6 +9,8 @@ const POST_ENDPOINTS = new Set([
   // Templated flyers: the sample layout (no AI) and the real generation.
   "flyer-sample",
   "generate-flyer",
+  // Generic playground: prompt + attached reference images (base64).
+  "generate-from-prompt",
   "retry-event",
   "switch-image-provider",
   "post-to-instagram",
@@ -27,6 +29,8 @@ const POST_ENDPOINTS = new Set([
   "activate-linkedin-ad-campaign",
 ]);
 const TIMEOUT_MS = 180_000;
+// Reference-image generation (OpenAI's edits endpoint) can take longer.
+const SLOW_TIMEOUT_MS: Record<string, number> = { "generate-from-prompt": 300_000 };
 
 export async function POST(request: NextRequest, ctx: RouteContext<"/api/ad/[...path]">) {
   const path = (await ctx.params).path.join("/");
@@ -42,7 +46,7 @@ export async function POST(request: NextRequest, ctx: RouteContext<"/api/ad/[...
   return proxyJson(
     `${base}/${path}`,
     { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
-    TIMEOUT_MS,
+    SLOW_TIMEOUT_MS[path] ?? TIMEOUT_MS,
   );
 }
 

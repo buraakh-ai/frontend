@@ -13,6 +13,9 @@ import {
   type AdImage, type FlyerConfig, type ImageModels, type FlyerField, type FlyerState, type FlyerTemplateId, type ProviderFailed,
 } from "./flyer-studio";
 import {
+  EMPTY_PLAYGROUND, GenericPlayground, PlaygroundResultCard, playgroundKey, type Playground,
+} from "./generic-playground";
+import {
   Alert, Button, Card, ChipSelect, DataTable, Expander, Metric, NumberInput, PageHeader, Select,
   Stepper, Tabs, TextArea, TextInput, downloadBlob, downloadText,
 } from "@/components/ui";
@@ -63,9 +66,9 @@ type SavedDraft = {
   image: AdImage | null;
   // Flyer template and per-template inputs; kept even before an image exists.
   flyer?: FlyerState;
+  // The Generic playground's prompt (attachments are too big to keep).
+  playgroundPrompt?: string;
 };
-
-const EVENT_SUGGESTIONS = ["Interest rates", "Year-end planning", "Tax deadlines"];
 
 // Overrides brand_tone / target_audience in the company details sent to the
 // image endpoint, so the poster follows the house style.
@@ -118,12 +121,20 @@ function formatWhen(date: string, time: string, zone: string) {
   return `${day}, ${clock} ${zone}`;
 }
 
-/** What the caption writer gets for the selected template. Service and
- * Webinar pass their own topic as the event, so no trending event is picked,
- * and the captions mention the same date and link as the flyer. */
-function campaignBrief(config: FlyerConfig | null, flyer: FlyerState, brand: Brand, form: Form) {
+/** What the caption writer gets for the selected template. Each passes its
+ * own topic as the event, so no trending event is picked: Generic the
+ * playground prompt (captions describe that image), Service and Webinar
+ * their fields (captions mention the same date and link as the flyer). */
+function campaignBrief(config: FlyerConfig | null, flyer: FlyerState, brand: Brand, form: Form, prompt: string) {
   const t = flyer.template;
-  if (!config || t === "generic") return { ad_idea: form.adIdea, event_context: form.eventContext };
+  if (t === "generic") {
+    const idea = prompt.replace(/\s+/g, " ").trim();
+    return {
+      ad_idea: `Social media post for this image (the person's own description of it): ${idea}`,
+      event_context: `Custom post: ${idea.slice(0, 300)}`,
+    };
+  }
+  if (!config) return { ad_idea: form.adIdea, event_context: form.eventContext };
   const v = flyerFields(config, t, flyerInputs(flyer, brand));
   const extra = (v.message || v.description || "").replace(/\s+/g, " ").trim();
   if (t === "service") {
@@ -143,7 +154,7 @@ function campaignBrief(config: FlyerConfig | null, flyer: FlyerState, brand: Bra
 
 const draftTitle = (d: SavedDraft) =>
   d.campaign?.ads?.image_headline || (d.flyer && d.flyer.template !== "generic" && d.flyer.values[d.flyer.template].topic)
-  || d.form.adIdea || d.form.companyName || "Untitled draft";
+  || d.playgroundPrompt?.slice(0, 80) || d.form.adIdea || d.form.companyName || "Untitled draft";
 const draftEvent = (d: SavedDraft) => d.campaign?.detected_event || d.form.eventContext || "Not generated yet";
 
 const store = createStore({
@@ -158,6 +169,7 @@ const store = createStore({
   captions: {} as Record<string, string>,
   image: null as AdImage | null,
   flyer: EMPTY_FLYER as FlyerState,
+  playground: EMPTY_PLAYGROUND as Playground,
   providerFailed: null as ProviderFailed | null,
   // The OpenAI image model picked in the flyer step; "" = the backend's default.
   imageModel: "",
@@ -178,6 +190,7 @@ function saveDraft() {
     captions: st.captions,
     image: st.image,
     flyer: st.flyer,
+    playgroundPrompt: st.playground.prompt,
   };
   const drafts = [draft, ...st.drafts.filter((d) => d.id !== draft.id)].slice(0, MAX_DRAFTS);
   writeLocal(LS_DRAFTS, drafts);
@@ -241,6 +254,7 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
       captions: d.captions,
       image: d.image,
       flyer: d.flyer ?? withGenericTopic(EMPTY_FLYER, d.campaign),
+      playground: { prompt: d.playgroundPrompt ?? "", attachments: [] },
       providerFailed: null,
       draftId: d.id,
       tab: d.campaign ? "review" : "generate",
@@ -349,16 +363,51 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
     }
   }
 
+  // Generic: the playground's prompt + attachments -> POST /generate-from-prompt.
+  async function generatePlayground() {
+    const p = store.get().playground;
+    if (!p.prompt.trim()) {
+      notify("playground", { kind: "error", text: "Describe the image you want first." });
+      return;
+    }
+    notify("playground", null);
+    try {
+      const data = await callApi<Dict>("ad", "generate-from-prompt", {
+        prompt: p.prompt,
+        attachments: p.attachments.map((a) => ({ name: a.name, data: a.data })),
+        image_model: s.imageModel || imageModels?.default || "",
+      });
+      if (data.success && typeof data.clean_image_url === "string") {
+        set({
+          image: {
+            clean_image_url: data.clean_image_url,
+            provider: data.provider as string | undefined,
+            prompt: data.prompt as string | undefined,
+            template: "generic",
+            inputsKey: playgroundKey(p),
+          },
+          providerFailed: null,
+        });
+        saveDraft();
+      } else {
+        notify("playground", { kind: "error", text: `Image error: ${data.error}` });
+      }
+    } catch (e) {
+      notify("playground", { kind: "error", text: `Something went wrong generating the image: ${(e as Error).message}` });
+    }
+  }
+
   const setCampaign = (data: Campaign, t: FlyerTemplateId) =>
     set((st) => ({
       campaign: { ...data, _template: t },
-      image: null,
+      // The playground image is made before the captions, so it stays.
+      image: t === "generic" ? st.image : null,
       captions: { ...(data.ads ?? {}) },
       flyer: withGenericTopic(st.flyer, data),
     }));
 
   const requestCampaign = (eventOverride?: string) => {
-    const brief = campaignBrief(flyerConfig, flyer, s.brand, form);
+    const brief = campaignBrief(flyerConfig, flyer, s.brand, form, store.get().playground.prompt);
     return callApi<Campaign>("ad", "generate", {
       company_name: form.companyName,
       product_description: form.productDescription,
@@ -402,7 +451,11 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
         notify("generate", { kind: "error", text: "Pick at least one platform." });
         return;
       }
-      if (flyerConfig) {
+      if (template === "generic" && !s.playground.prompt.trim()) {
+        notify("generate", { kind: "error", text: "Describe the image in the playground first." });
+        return;
+      }
+      if (flyerConfig && template !== "generic") {
         const errors = flyerErrors(flyerConfig, template, inputs, briefFields);
         setFieldErrors(errors);
         if (Object.keys(errors).length) {
@@ -431,16 +484,16 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
 
   // The generated flyer, only while it still matches the selected template
   // and its inputs; publishing and downloading use nothing else.
-  const readyImage = s.image && flyerConfig && s.image.template === template
-    && s.image.inputsKey === flyerKey(flyerConfig, template, inputs)
+  const currentImageKey = template === "generic" ? playgroundKey(s.playground)
+    : flyerConfig ? flyerKey(flyerConfig, template, inputs) : null;
+  const readyImage = s.image && currentImageKey && s.image.template === template && s.image.inputsKey === currentImageKey
     ? s.image : null;
+  const playgroundImage = s.image?.template === "generic" ? s.image : null;
   // Captions are written for one template; switching after that needs a rerun.
   const captionsMismatch = !!campaign?._template && campaign._template !== template && flyerConfig
     ? `The captions were written for the ${flyerConfig.templates[campaign._template].label} template. `
       + "Generate the campaign again from the Brief to match the selected template."
     : null;
-  // The Generic sample shows the ad idea until the AI writes a headline.
-  const previewValues = template === "generic" && !inputs.topic?.trim() ? { ...inputs, topic: form.adIdea } : inputs;
 
   return (
     <>
@@ -499,35 +552,17 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
               )}
 
               {template === "generic" ? (
-                <>
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <TextArea label="Ad idea or angle" placeholder="e.g. Year-end tax moves for small business owners"
-                      value={form.adIdea} onChange={(v) => setForm({ adIdea: v })} />
-                    <div className="space-y-2.5">
-                      <TextInput label="Current event to connect to" placeholder="Leave blank and AI picks a trending event"
-                        value={form.eventContext} onChange={(v) => setForm({ eventContext: v })} />
-                      <div className="flex flex-wrap gap-2">
-                        {EVENT_SUGGESTIONS.map((ev) => (
-                          <button key={ev} type="button" onClick={() => setForm({ eventContext: ev })}
-                            className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
-                              form.eventContext === ev
-                                ? "border-accent/40 bg-accent/10 text-accent"
-                                : "border-line bg-canvas text-navy hover:border-navy/30"
-                            }`}>
-                            {ev}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                  <TextInput
-                    label="Call-to-action URL"
-                    placeholder="https://www.agfintax.com/contact/"
-                    hint="Used in the captions. Leave blank to use the website URL."
-                    value={form.contactUrl}
-                    onChange={(v) => setForm({ contactUrl: v })}
-                  />
-                </>
+                <GenericPlayground
+                  value={s.playground}
+                  onChange={(playground) => set({ playground })}
+                  imageModels={imageModels}
+                  imageModel={s.imageModel}
+                  onImageModelChange={(imageModel) => set({ imageModel })}
+                  image={playgroundImage}
+                  generating={busy === "playground"}
+                  notice={notices.playground ?? null}
+                  onGenerate={() => run("playground", generatePlayground)}
+                />
               ) : flyerConfig && (
                 <FieldGrid fields={briefFields} values={inputs} errors={fieldErrors}
                   timezones={flyerConfig.timezones} onChange={setFlyerValue} />
@@ -563,14 +598,18 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
                   Save draft
                 </Button>
                 <Button type="submit" variant="primary" icon={Zap} loading={busy === "generate"}>
-                  {busy === "generate" ? "Researching and writing…" : "Generate campaign"}
+                  {busy === "generate" ? "Researching and writing…"
+                    : template === "generic" ? "Write captions & continue" : "Generate campaign"}
                 </Button>
               </div>
             </form>
           </Card>
 
           <aside className="space-y-6">
-            {flyerConfig && <FlyerPreviewCard config={flyerConfig} template={template} values={previewValues} />}
+            {template === "generic"
+              ? <PlaygroundResultCard image={playgroundImage} generating={busy === "playground"}
+                  stale={!!playgroundImage && playgroundImage.inputsKey !== playgroundKey(s.playground)} />
+              : flyerConfig && <FlyerPreviewCard config={flyerConfig} template={template} values={inputs} />}
             <BrandProfileCard brand={s.brand} detailFields={flyerConfig ? detailFields(flyerConfig) : []} onSave={saveBrand} />
             <RecentDrafts drafts={s.drafts} activeId={s.draftId} onOpen={loadDraft} onDelete={deleteDraft} />
           </aside>
@@ -587,41 +626,11 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
               <section className={`rounded-xl border border-ocean/15 bg-tint p-5 ${campaign.quality_score ? "" : "lg:col-span-2"}`}>
                 <div className="flex items-center justify-between gap-3">
                   <div className="text-[11px] font-bold uppercase tracking-wider text-navy/70">
-                    {template === "generic" ? "Event used" : "Written for"}
+                    {template === "generic" ? "Written from your image prompt" : "Written for"}
                   </div>
-                  {/* Service and Webinar are tied to their own topic, not a trending event. */}
-                  {template === "generic" && (
-                    <button
-                      type="button"
-                      disabled={busy === "retry"}
-                      onClick={() =>
-                        run("retry", async () => {
-                          try {
-                            const data = await callApi<Campaign>("ad", "retry-event", {
-                              company_name: companyName,
-                              company_url: form.companyUrl,
-                            });
-                            if (data.success) {
-                              setCampaign(data, template);
-                              saveDraft();
-                              notify("retry", null);
-                            } else {
-                              notify("retry", { kind: "error", text: `Could not get a new event: ${data.error}` });
-                            }
-                          } catch (e) {
-                            notify("retry", { kind: "error", text: `Something went wrong retrying the event: ${(e as Error).message}` });
-                          }
-                        })
-                      }
-                      className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-navy/20 bg-white/70 px-3 py-1 text-xs font-semibold text-navy hover:bg-white disabled:opacity-60"
-                    >
-                      <RefreshCw className={`size-3.5 ${busy === "retry" ? "animate-spin" : ""}`} aria-hidden />
-                      {busy === "retry" ? "Finding a new event…" : "Try another event"}
-                    </button>
-                  )}
                 </div>
                 <p className="mt-2 text-[15px] font-medium leading-relaxed text-navy">
-                  {campaign.detected_event || "No specific event was used."}
+                  {campaign.detected_event?.replace(/^Custom post: /, "") || "No specific event was used."}
                 </p>
               </section>
               {!!campaign.quality_score && (
@@ -636,9 +645,8 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
                 </section>
               )}
             </div>
-            <NoticeLine notice={notices.retry ?? null} />
 
-            {flyerConfig && fieldsFor(flyerConfig, template, "review").length > 0 && (
+            {flyerConfig && template !== "generic" && fieldsFor(flyerConfig, template, "review").length > 0 && (
               <section className="rounded-xl border border-line bg-white p-5 shadow-sm">
                 <FieldGrid fields={fieldsFor(flyerConfig, template, "review")} values={inputs} errors={fieldErrors}
                   timezones={flyerConfig.timezones} onChange={setFlyerValue} />
@@ -685,7 +693,8 @@ export function AdGenerator({ defaults, showPaidPromotion }: {
                 imageModels={imageModels}
                 imageModel={s.imageModel}
                 onImageModelChange={(imageModel) => set({ imageModel })}
-                onEditDetails={() => set({ tab: template === "generic" ? "review" : "generate" })}
+                onEditDetails={() => set({ tab: "generate" })}
+                currentKey={currentImageKey ?? undefined}
                 onGenerate={() => run("image", generateFlyer)}
                 onSwitchProvider={(p) => run("switch", async () => {
                   try {
